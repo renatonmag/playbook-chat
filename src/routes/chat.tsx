@@ -69,7 +69,8 @@ export default function Chat() {
             fallback={
               <div class="flex justify-start">
                 <p class="max-w-[80%] rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-700">
-                  Send a market observation and I will echo it back for now.
+                  Send a market observation and I will report what to expect, what could go wrong,
+                  and whether it looks like a good place to enter.
                 </p>
               </div>
             }

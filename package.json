@@ -8,6 +8,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@langchain/core": "^1.1.45",
+    "@langchain/openai": "^1.4.5",
     "@libsql/client": "^0.17.3",
     "@solidjs/router": "^0.15.0",
     "@solidjs/start": "2.0.0-alpha.2",
@@ -17,6 +19,7 @@
     "@trpc/server": "^11.17.0",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
+    "langchain": "^1.4.0",
     "solid-js": "^1.9.5",
     "vite": "^7.0.0",
     "zod": "^4.4.3"
