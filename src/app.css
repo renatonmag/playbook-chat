@@ -1,18 +1,44 @@
 @import "tailwindcss";
 
 :root {
-  --background-rgb: 214, 219, 220;
-  --foreground-rgb: 0, 0, 0;
+  --app-bg: #020617;
+  --app-fg: #e2e8f0;
+  --grid-color: rgba(148, 163, 184, 0.08);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background-rgb: 0, 0, 0;
-    --foreground-rgb: 255, 255, 255;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background:
+    radial-gradient(circle at top, rgba(251, 191, 36, 0.14), transparent 28%),
+    radial-gradient(circle at 20% 20%, rgba(14, 165, 233, 0.12), transparent 22%),
+    linear-gradient(180deg, #020617 0%, #0f172a 100%);
+  background-color: var(--app-bg);
 }
 
 body {
-  background: rgb(var(--background-rgb));
-  color: rgb(var(--foreground-rgb));
+  min-height: 100vh;
+  background-image:
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+  background-size: 36px 36px;
+  color: var(--app-fg);
+  font-family:
+    "IBM Plex Sans",
+    "Segoe UI",
+    sans-serif;
+}
+
+a {
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    opacity 140ms ease;
+}
+
+::selection {
+  background: rgba(251, 191, 36, 0.28);
+  color: white;
 }

@@ -3,14 +3,16 @@ import { useLocation } from "@solidjs/router";
 export default function Nav() {
   const location = useLocation();
   const active = (path: string) =>
-    path == location.pathname ? "border-sky-600" : "border-transparent hover:border-sky-600";
+    path == location.pathname
+      ? "border-amber-300 text-white"
+      : "border-transparent text-slate-300 hover:border-slate-400 hover:text-white";
   return (
-    <nav class="bg-sky-800">
-      <ul class="container flex items-center p-3 text-gray-200">
-        <li class={`border-b-2 ${active("/")} mx-1.5 sm:mx-6`}>
+    <nav class="sticky top-0 z-10 border-b border-white/10 bg-slate-950/85 backdrop-blur">
+      <ul class="mx-auto flex max-w-6xl items-center gap-6 px-4 py-4 text-sm font-medium tracking-[0.18em] uppercase">
+        <li class={`border-b-2 pb-1 ${active("/")}`}>
           <a href="/">Home</a>
         </li>
-        <li class={`border-b-2 ${active("/about")} mx-1.5 sm:mx-6`}>
+        <li class={`border-b-2 pb-1 ${active("/about")}`}>
           <a href="/about">About</a>
         </li>
       </ul>
