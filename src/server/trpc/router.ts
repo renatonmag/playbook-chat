@@ -12,6 +12,15 @@ export const appRouter = router({
     .input(z.object({ name: z.string().trim().min(1).default("trader") }))
     .query(({ input }) => ({
       message: `Hello, ${input.name}.`
+    })),
+  chat: publicProcedure
+    .input(
+      z.object({
+        message: z.string().trim().min(1)
+      })
+    )
+    .mutation(({ input }) => ({
+      message: input.message
     }))
 });
 
