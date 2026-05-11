@@ -24,8 +24,8 @@ function getOpenAIApiKey() {
 function createTradingModel() {
   return new ChatOpenAI({
     apiKey: getOpenAIApiKey(),
-    model: "gpt-5.4-mini", // "gpt-5.5-2026-04-23"
-    temperature: 0,
+    model: "gpt-5.4", // "gpt-5.5-2026-04-23"
+    temperature: 0.2,
   });
 }
 

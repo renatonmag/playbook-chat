@@ -1,5 +1,11 @@
-import { int, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
+import { int, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
 
 export const usersTable = sqliteTable("users", {
   id: int().primaryKey({ autoIncrement: true }),
@@ -13,4 +19,18 @@ export const usersTable = sqliteTable("users", {
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
   deletedAt: int(),
+});
+
+export const chatThreadsTable = sqliteTable("chat_threads", {
+  id: text("id").primaryKey(),
+  messages: text("messages", { mode: "json" })
+    .$type<ChatMessage[]>()
+    .notNull()
+    .default(sql`'[]'`),
+  createdAt: int("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: int("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
 });

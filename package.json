@@ -5,7 +5,9 @@
     "dev": "vite dev",
     "build": "vite build",
     "start": "vite start",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
     "@langchain/core": "^1.1.45",
