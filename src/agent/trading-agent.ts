@@ -53,6 +53,12 @@ const contextCheckerResponseSchema = z.object({
   questions: z.array(z.string().trim().min(1)).default([]),
 });
 
+const defaultContextCheckerResponse = {
+  sufficient: true,
+  missing_context: [],
+  questions: [],
+} as const;
+
 const PATTERN_DOCS: Record<string, string> = {
   "failed breakout":
     "Failed breakouts often lead to reversals or trading ranges.",
@@ -82,6 +88,14 @@ function getTradingModel() {
   });
 
   return llm;
+}
+
+function getContextCheckerModel() {
+  return getTradingModel().withStructuredOutput(contextCheckerResponseSchema, {
+    name: "context_checker_response",
+    method: "functionCalling",
+    strict: true,
+  });
 }
 
 function getLangSmithProjectName() {
@@ -133,40 +147,6 @@ function buildConversationTranscript(
   lines.push(`User: ${prompt}`);
 
   return lines.join("\n\n");
-}
-
-function extractJson(text: string) {
-  const trimmed = text.trim();
-  const fencedJson = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-
-  if (fencedJson?.[1]) {
-    return fencedJson[1].trim();
-  }
-
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-
-  if (start >= 0 && end > start) {
-    return trimmed.slice(start, end + 1);
-  }
-
-  return trimmed;
-}
-
-function parseContextCheckerResponse(text: string) {
-  try {
-    const parsed = JSON.parse(extractJson(text));
-
-    return contextCheckerResponseSchema.parse(parsed);
-  } catch (error) {
-    console.error("Error parsing context checker response:", error);
-
-    return {
-      sufficient: true,
-      missing_context: [],
-      questions: [],
-    };
-  }
 }
 
 function createContextSufficiencyResult(
@@ -235,7 +215,8 @@ const retrieveDocs: GraphNode<typeof TradingState> = (
 const checkContext: GraphNode<typeof TradingState> = async (
   state,
 ): Promise<TradingStateUpdate> => {
-  const result = await getTradingModel().invoke(`
+  try {
+    const json = await getContextCheckerModel().invoke(`
 You are a market context evaluator.
 
 Determine if there is enough context
@@ -257,23 +238,22 @@ Rules:
   the day range, signal bar quality, follow-through, overlap, tails, and moving
   average relationship when relevant.
 - Ask at most 3 concise questions.
-
-Return JSON:
-
-{
-  "sufficient": boolean,
-  "missing_context": string[],
-  "questions": string[]
-}
 `);
 
-  const json = parseContextCheckerResponse(contentToText(result.content));
+    return {
+      contextSufficient: json.sufficient,
+      missingContext: (json.missing_context ?? []).slice(0, 8),
+      questions: (json.questions ?? []).slice(0, 3),
+    };
+  } catch (error) {
+    console.error("Error getting context checker response:", error);
 
-  return {
-    contextSufficient: json.sufficient,
-    missingContext: json.missing_context.slice(0, 8),
-    questions: json.questions.slice(0, 3),
-  };
+    return {
+      contextSufficient: defaultContextCheckerResponse.sufficient,
+      missingContext: [...defaultContextCheckerResponse.missing_context],
+      questions: [...defaultContextCheckerResponse.questions],
+    };
+  }
 };
 
 const askQuestions: GraphNode<typeof TradingState> = (
