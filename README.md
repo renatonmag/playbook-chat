@@ -1,32 +1,52 @@
-# SolidStart
+# Playbook Chat
 
-Everything you need to build a Solid project, powered by [`solid-start`](https://start.solidjs.com);
+Trading assistant application built with SolidStart, tRPC, Drizzle, and LangChain.
 
-## Creating a project
+## Development
 
-```bash
-# create a new project in the current directory
-npm init solid@latest
-
-# create a new project in my-app
-npm init solid@latest my-app
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Install dependencies and start the app:
 
 ```bash
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+pnpm install
+pnpm dev
 ```
 
-## Building
+Build for production:
 
-Solid apps are built with _presets_, which optimise your project for deployment to different environments.
+```bash
+pnpm build
+pnpm start
+```
 
-By default, `npm run build` will generate a Node app that you can run with `npm start`. To use a different preset, add it to the `devDependencies` in `package.json` and specify in your `app.config.js`.
+## LangSmith Observability
 
-## This project was created with the [Solid CLI](https://github.com/solidjs-community/solid-cli)
+`src/agent/trading-agent.ts` is instrumented with LangSmith tracing.
+
+Tracing stays off unless `LANGSMITH_TRACING=true`.
+
+Required environment variables:
+
+```bash
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=your-langsmith-api-key
+```
+
+Recommended environment variables:
+
+```bash
+LANGSMITH_PROJECT=playbook-chat
+LANGCHAIN_CALLBACKS_BACKGROUND=true
+```
+
+Set `LANGSMITH_WORKSPACE_ID` only when the API key belongs to multiple LangSmith workspaces.
+
+With tracing enabled, each `runTradingAgent` call logs:
+
+- a top-level `runTradingAgent` trace
+- nested LangGraph and LangChain runs for pattern detection, context checking, and report generation
+- structured tags and metadata, including prompt length, history count, model, result state, and context sufficiency
+
+Current tracing policy:
+
+- raw trading prompts and chat history are sent to LangSmith
+- tracing config is driven entirely by environment variables

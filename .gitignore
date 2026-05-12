@@ -29,3 +29,5 @@ Thumbs.db
 
 SQLite Database
 *.db
+
+.nitro/
