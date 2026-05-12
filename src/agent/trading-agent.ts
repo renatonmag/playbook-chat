@@ -15,6 +15,7 @@ import {
   contextSufficiencyResultSchema,
   tradingAgentResultSchema,
 } from "./schemas";
+import { technicalAnalysisSystemPrompt } from "./prompts";
 import type {
   ContextSufficiencyResult,
   TradingAgentInput,
@@ -295,27 +296,13 @@ ${questions.map((question) => `- ${question}`).join("\n")}
 const generateReport: GraphNode<typeof TradingState> = async (
   state,
 ): Promise<TradingStateUpdate> => {
-  const result = await getTradingModel().invoke(`
-You are an Al Brooks style technical analyst.
-
-User description:
-${state.userInput}
-
-Detected patterns:
-${state.detectedPatterns.join(", ")}
-
-Pattern knowledge:
-${state.patternDocs.join("\n")}
-
-Create a structured report with:
-
-1. Context
-2. What traders expect
-3. What could go wrong
-4. Trade opportunities
-5. Invalidation
-6. Probability assessment
-`);
+  const result = await getTradingModel().invoke(
+    technicalAnalysisSystemPrompt({
+      userInput: state.userInput,
+      detectedPatterns: state.detectedPatterns,
+      patternDocs: state.patternDocs,
+    }),
+  );
 
   const report = contentToText(result.content).trim();
 

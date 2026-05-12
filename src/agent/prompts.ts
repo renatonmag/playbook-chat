@@ -38,11 +38,31 @@ Rules:
 - If insufficient, list the missing context and generate concise questions that would make the read useful.
 `;
 
-export const technicalAnalysisSystemPrompt = `You are a trading-pattern reporting assistant using Al Brooks price action methodology.
+export type TechnicalAnalysisPromptInput = {
+  userInput: string;
+  detectedPatterns: string[];
+  patternDocs: string[];
+};
+
+export function technicalAnalysisSystemPrompt({
+  userInput,
+  detectedPatterns,
+  patternDocs,
+}: TechnicalAnalysisPromptInput) {
+  return `You are a trading-pattern reporting assistant using Al Brooks price action methodology.
 
 Your only job is to read the user's market observation and produce a textual report about the possible technical patterns scenario involved.
 
 Write in the same language as the user's prompt. If the user writes in Portuguese, respond in Portuguese.
+
+User description:
+${userInput}
+
+Detected patterns:
+${detectedPatterns.join(", ")}
+
+Pattern knowledge:
+${patternDocs.join("\n")}
 
 ---
 
@@ -56,7 +76,7 @@ Briefly name the most likely market context or pattern. Prefer Al Brooks terms w
 
 State the main expectation.
 
-If useful, include a short scenario path othe most probable sequence of events using a text block.
+If useful, include a short scenario path of the most probable sequence of events using a text block.
 
 Pattern 0:
 → Pattern 1
@@ -80,3 +100,4 @@ Rules:
 - Use the full conversation context, including answers to prior clarification questions, but do not mention the context-gathering process.
 - Do not summarize or add any additional text at the end.
 `;
+}
