@@ -1,10 +1,17 @@
 import { sql } from "drizzle-orm";
 import { int, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import type { AgentState, ContextSufficiencyResult } from "~/agent/types";
+
+export type ChatMessageMetadata = {
+  agentState?: AgentState;
+  contextSufficiency?: ContextSufficiencyResult;
+};
 
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  metadata?: ChatMessageMetadata;
 };
 
 export const usersTable = sqliteTable("users", {

@@ -2,23 +2,38 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { runTradingAgent } from "~/agent";
+import {
+  agentStateSchema,
+  chatMessageMetadataSchema,
+  contextSufficiencyResultSchema,
+} from "~/agent/schemas";
 import { db } from "~/db";
-import { chatThreadsTable, type ChatMessage } from "~/db/schema";
+import {
+  chatThreadsTable,
+  type ChatMessage,
+  type ChatMessageMetadata,
+} from "~/db/schema";
 import { publicProcedure, router } from "./init";
 
 const chatMessageSchema = z.object({
   id: z.string().min(1),
   role: z.enum(["user", "assistant"]),
   content: z.string().min(1),
+  metadata: chatMessageMetadataSchema.optional(),
 });
 
 const chatMessagesSchema = z.array(chatMessageSchema);
 
-function createMessage(role: ChatMessage["role"], content: string): ChatMessage {
+function createMessage(
+  role: ChatMessage["role"],
+  content: string,
+  metadata?: ChatMessageMetadata,
+): ChatMessage {
   return {
     id: crypto.randomUUID(),
     role,
     content,
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -146,6 +161,15 @@ export const appRouter = router({
         message: z.string().trim().min(1),
       }),
     )
+    .output(
+      z.object({
+        threadId: z.string().uuid(),
+        messages: chatMessagesSchema,
+        message: z.string().min(1),
+        state: agentStateSchema,
+        contextSufficiency: contextSufficiencyResultSchema,
+      }),
+    )
     .mutation(async ({ input }) => {
       const existingThread = input.threadId
         ? await getThreadById(input.threadId)
@@ -160,8 +184,14 @@ export const appRouter = router({
 
       const thread = existingThread ?? (await createThread([]));
       const userMessage = createMessage("user", input.message);
-      const result = await runTradingAgent({ prompt: input.message });
-      const assistantMessage = createMessage("assistant", result.report);
+      const result = await runTradingAgent({
+        prompt: input.message,
+        history: thread.messages,
+      });
+      const assistantMessage = createMessage("assistant", result.report, {
+        agentState: result.state,
+        contextSufficiency: result.contextSufficiency,
+      });
       const messages = [...thread.messages, userMessage, assistantMessage];
       const updatedThread = await updateThread(thread.id, messages);
 
@@ -169,6 +199,8 @@ export const appRouter = router({
         threadId: updatedThread.id,
         messages: updatedThread.messages,
         message: result.report,
+        state: result.state,
+        contextSufficiency: result.contextSufficiency,
       };
     }),
 });
