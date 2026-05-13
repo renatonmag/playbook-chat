@@ -1,4 +1,5 @@
 import { For, Show, createSignal, onMount } from "solid-js";
+import { renderMarkdown } from "~/lib/render-markdown";
 import { getTRPCClient } from "~/lib/trpc/client";
 
 type ChatMessage = {
@@ -33,6 +34,14 @@ function createMessageId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function isRenderableReport(message: ChatMessage) {
+  return (
+    message.role === "assistant" &&
+    (message.metadata?.agentState === "analysis_ready" ||
+      message.metadata?.agentState === "trade_plan_ready")
+  );
+}
+
 export default function Chat() {
   const [threads, setThreads] = createSignal<ChatThread[]>([]);
   const [threadId, setThreadId] = createSignal<string>();
@@ -44,10 +53,12 @@ export default function Chat() {
   const [deletingThreadId, setDeletingThreadId] = createSignal<string>();
   const [isSending, setIsSending] = createSignal(false);
   const [error, setError] = createSignal("");
+  const [hasMounted, setHasMounted] = createSignal(false);
 
   const canSubmit = () => draft().trim().length > 0 && !isSending() && !isLoadingThread();
 
   onMount(() => {
+    setHasMounted(true);
     void loadThreads();
   });
 
@@ -359,13 +370,17 @@ export default function Chat() {
             }
           >
             <For each={messages()}>
-              {message => (
+              {message => {
+                const shouldRenderMarkdown = () =>
+                  hasMounted() && isRenderableReport(message);
+
+                return (
                 <div class={message.role === "user" ? "flex justify-end" : "flex justify-start"}>
-                  <p
+                  <div
                     class={
                       message.role === "user"
                         ? "max-w-[80%] whitespace-pre-wrap rounded-lg rounded-br-sm bg-sky-700 px-4 py-3 text-sm leading-6 text-white"
-                        : "max-w-[80%] whitespace-pre-wrap rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-800"
+                        : "max-w-[80%] rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-800"
                     }
                   >
                     <Show when={message.metadata?.agentState === "needs_context"}>
@@ -373,10 +388,20 @@ export default function Chat() {
                         Needs context
                       </span>
                     </Show>
-                    {message.content}
-                  </p>
+
+                    <Show
+                      when={shouldRenderMarkdown()}
+                      fallback={<div class="whitespace-pre-wrap">{message.content}</div>}
+                    >
+                      <div
+                        class="report-markdown"
+                        innerHTML={renderMarkdown(message.content)}
+                      />
+                    </Show>
+                  </div>
                 </div>
-              )}
+                );
+              }}
             </For>
           </Show>
 

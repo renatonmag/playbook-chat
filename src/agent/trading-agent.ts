@@ -55,7 +55,7 @@ const contextCheckerResponseSchema = z.object({
 
 const defaultContextCheckerResponse = {
   sufficient: true,
-  missing_context: [],
+  missing_context: ["Missing"],
   questions: [],
 } as const;
 
