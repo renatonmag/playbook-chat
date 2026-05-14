@@ -18,6 +18,7 @@ import {
 import { technicalAnalysisSystemPrompt } from "./prompts";
 import type {
   ContextSufficiencyResult,
+  MarketState,
   TradingAgentInput,
   TradingAgentResult,
 } from "./types";
@@ -27,37 +28,107 @@ export type { TradingAgentInput, TradingAgentResult } from "./types";
 const CONTEXT_REQUEST_HEADER =
   "Before I give the read, I need a bit more context:";
 
-const FALLBACK_CONTEXT_QUESTION =
-  "What is the current market location, trend/range state, and recent follow-through?";
-
 const DEFAULT_LANGSMITH_PROJECT = "playbook-chat";
 const TRADING_MODEL_NAME = "gpt-5.4-mini";
 const BASE_TRACE_TAGS = ["trading-agent", "langgraph", "analysis"] as const;
+
+const activeMarketCicleSchema = z.enum([
+  "breakout",
+  "tight_channel",
+  "broad_channel",
+  "trading_range",
+  "reversal",
+  "unclear",
+]);
+
+const rangeTypeSchema = z.enum([
+  "tight_range",
+  "normal_range",
+  "wide_range",
+  "expanding_range",
+  "no_range",
+]);
+
+const rangeLocationSchema = z.enum([
+  "above_range",
+  "top",
+  "middle",
+  "bottom",
+  "below_range",
+  "no_range",
+]);
+
+const structureStatusSchema = z.enum([
+  "active",
+  "ended",
+  "weakening",
+  "completed",
+  "broken",
+  "failed",
+  "unclear",
+]);
+
+const directionalBiasSchema = z.enum(["bullish", "bearish", "neutral"]);
+
+const dayTypeSchema = z.enum([
+  "trend_from_open",
+  "trading_range_day",
+  "trending_trading_ranges",
+  "broad_channel_day",
+  "small_pullback_trend_day",
+  "unclear",
+]);
+
+const marketStateSchema: z.ZodType<MarketState> = z.object({
+  cicle: z.object({
+    broaderMarketCicle: activeMarketCicleSchema,
+    innerMarketCicle: activeMarketCicleSchema,
+  }),
+  rangeType: rangeTypeSchema.optional(),
+  locationInRange: rangeLocationSchema.optional(),
+  sessionContext: z
+    .object({
+      barNumber: z.number().int().nonnegative().optional(),
+      dayType: dayTypeSchema.optional(),
+    })
+    .optional(),
+  activeStructures: z.array(
+    z.object({
+      name: z.string().trim().min(1),
+      status: structureStatusSchema,
+      evidence: z.array(z.string().trim().min(1)),
+    }),
+  ),
+  currentBias: z.object({
+    primaryDirection: directionalBiasSchema,
+    currentDirection: directionalBiasSchema,
+    confidenceOfCurrentDirection: z.number().min(0).max(100),
+    reason: z.string().trim().min(1),
+  }),
+  latestEvent: z
+    .object({
+      description: z.string().trim().min(1),
+      tags: z.array(z.string().trim().min(1)),
+      direction: directionalBiasSchema,
+      changesPreviousRead: z.boolean(),
+      effect: z.string().trim().min(1),
+      invalidates: z.array(z.string().trim().min(1)),
+      supports: z.array(z.string().trim().min(1)),
+    })
+    .optional(),
+  openQuestions: z.array(z.string().trim().min(1)),
+});
 
 const AgentState = new StateSchema({
   userInput: z.string(),
   detectedPatterns: z.array(z.string()).default([]),
   patternDocs: z.array(z.string()).default([]),
-  contextSufficient: z.boolean().optional(),
-  marketState: z.string().optional(),
-  questions: z.array(z.string()).default([]),
+  marketState: marketStateSchema.optional(),
   report: z.string().optional(),
 });
 
 type AgentStateType = typeof AgentState.State;
 type AgentStateUpdate = typeof AgentState.Update;
-
-const contextCheckerResponseSchema = z.object({
-  sufficient: z.boolean(),
-  missing_context: z.array(z.string().trim().min(1)).default([]),
-  questions: z.array(z.string().trim().min(1)).default([]),
-});
-
-const defaultContextCheckerResponse = {
-  sufficient: true,
-  missing_context: ["Missing"],
-  questions: [],
-} as const;
 
 const PATTERN_DOCS: Record<string, string> = {
   "failed breakout":
@@ -90,9 +161,9 @@ function getTradingModel() {
   return llm;
 }
 
-function getContextCheckerModel() {
-  return getTradingModel().withStructuredOutput(contextCheckerResponseSchema, {
-    name: "context_checker_response",
+function getMarketStateModel() {
+  return getTradingModel().withStructuredOutput(marketStateSchema, {
+    name: "market_state_response",
     method: "functionCalling",
     strict: true,
   });
@@ -152,24 +223,13 @@ function buildConversationTranscript(
 function createContextSufficiencyResult(
   graphResult: AgentStateType,
 ): ContextSufficiencyResult {
-  if (graphResult.contextSufficient === false) {
-    const questions =
-      graphResult.questions.length > 0
-        ? graphResult.questions.slice(0, 3)
-        : [FALLBACK_CONTEXT_QUESTION];
-
-    return contextSufficiencyResultSchema.parse({
-      context_sufficiency: "insufficient",
-      context_request_header: CONTEXT_REQUEST_HEADER,
-      missing_context: graphResult.missingContext.slice(0, 8),
-      questions,
-    });
-  }
+  const openQuestions = graphResult.marketState?.openQuestions ?? [];
 
   return contextSufficiencyResultSchema.parse({
-    context_sufficiency: "sufficient",
+    context_sufficiency:
+      openQuestions.length > 0 ? "insufficient" : "sufficient",
     context_request_header: CONTEXT_REQUEST_HEADER,
-    missing_context: [],
+    missing_context: openQuestions.slice(0, 8),
     questions: [],
   });
 }
@@ -212,75 +272,54 @@ const retrieveDocs: GraphNode<typeof AgentState> = (
   };
 };
 
-const checkContext: GraphNode<typeof AgentState> = async (
+const buildMarketState: GraphNode<typeof AgentState> = async (
   state,
 ): Promise<AgentStateUpdate> => {
-  try {
-    const json = await getContextCheckerModel().invoke(`
-You are a market context evaluator.
+  const marketState = await getMarketStateModel().invoke(`
+You are a market structure extraction assistant for an Al Brooks price action trading workflow.
 
-Determine if there is enough context
-to produce a reliable trading analysis.
+Build a conservative structured market state from the transcript and detected patterns.
 
-User description:
+Conversation transcript:
 ${state.userInput}
 
 Detected patterns:
 ${state.detectedPatterns.join(", ")}
 
+Pattern knowledge:
+${state.patternDocs.join("\n")}
+
 Rules:
-- Mark context sufficient when the description gives enough price-action context
-  for a useful Al Brooks style read, even if exact prices are missing.
-- Do not require instrument, exact numeric prices, volume, account details,
-  or higher-timeframe context unless the user's described setup specifically
-  depends on those details.
-- Prefer asking about missing market structure: trend vs range, location in
-  the day range, signal bar quality, follow-through, overlap, tails, and moving
-  average relationship when relevant.
-- Ask at most 3 concise questions.
+- Extract only what is supported by the transcript.
+- Use "unclear" enum values when evidence is weak or missing.
+- Do not invent price levels, indicators, timeframes, or events.
+- Keep activeStructures evidence grounded in quoted or closely paraphrased transcript details.
+- Use openQuestions for remaining high-signal unknowns that materially limit confidence.
+- openQuestions should contain concise missing-context statements, not conversational follow-up questions.
+- If no meaningful latest event is described, omit latestEvent.
+- confidenceOfCurrentDirection must be a number from 0 to 100.
 `);
 
-    return {
-      contextSufficient: json.sufficient,
-      missingContext: (json.missing_context ?? []).slice(0, 8),
-      questions: (json.questions ?? []).slice(0, 3),
-    };
-  } catch (error) {
-    console.error("Error getting context checker response:", error);
-
-    return {
-      contextSufficient: defaultContextCheckerResponse.sufficient,
-      missingContext: [...defaultContextCheckerResponse.missing_context],
-      questions: [...defaultContextCheckerResponse.questions],
-    };
-  }
-};
-
-const askQuestions: GraphNode<typeof AgentState> = (
-  state,
-): AgentStateUpdate => {
-  const questions =
-    state.questions.length > 0
-      ? state.questions.slice(0, 3)
-      : [FALLBACK_CONTEXT_QUESTION];
-
   return {
-    questions,
-    report: `I need more context before analysis:
-
-${questions.map((question) => `- ${question}`).join("\n")}
-`,
+    marketState,
   };
 };
 
 const generateReport: GraphNode<typeof AgentState> = async (
   state,
 ): Promise<AgentStateUpdate> => {
+  const marketState = state.marketState;
+
+  if (!marketState) {
+    throw new Error("Trading agent could not build market state.");
+  }
+
   const result = await getTradingModel().invoke(
     technicalAnalysisSystemPrompt({
       userInput: state.userInput,
       detectedPatterns: state.detectedPatterns,
       patternDocs: state.patternDocs,
+      marketState: JSON.stringify(marketState, null, 2),
     }),
   );
 
@@ -298,16 +337,12 @@ const generateReport: GraphNode<typeof AgentState> = async (
 const graph = new StateGraph(AgentState)
   .addNode("detect_patterns", detectPatterns)
   .addNode("retrieve_docs", retrieveDocs)
-  .addNode("check_context", checkContext)
-  .addNode("ask_questions", askQuestions)
+  .addNode("build_market_state", buildMarketState)
   .addNode("generate_report", generateReport)
   .addEdge(START, "detect_patterns")
   .addEdge("detect_patterns", "retrieve_docs")
-  .addEdge("retrieve_docs", "check_context")
-  .addConditionalEdges("check_context", (state) =>
-    state.contextSufficient ? "generate_report" : "ask_questions",
-  )
-  .addEdge("ask_questions", END)
+  .addEdge("retrieve_docs", "build_market_state")
+  .addEdge("build_market_state", "generate_report")
   .addEdge("generate_report", END)
   .compile();
 

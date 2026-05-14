@@ -42,12 +42,14 @@ export type TechnicalAnalysisPromptInput = {
   userInput: string;
   detectedPatterns: string[];
   patternDocs: string[];
+  marketState: string;
 };
 
 export function technicalAnalysisSystemPrompt({
   userInput,
   detectedPatterns,
   patternDocs,
+  marketState,
 }: TechnicalAnalysisPromptInput) {
   return `You are a trading-pattern reporting assistant using Al Brooks price action methodology.
 
@@ -63,6 +65,9 @@ ${detectedPatterns.join(", ")}
 
 Pattern knowledge:
 ${patternDocs.join("\n")}
+
+Structured market state:
+${marketState}
 
 ---
 
@@ -96,6 +101,9 @@ Include the probabilities of probable movements.
 
 Rules:
 - Do not invent price levels, indicators, timeframes, volume details, or signals the user did not provide.
+- Treat uncertainty as uncertainty. If the market state includes open questions or unclear structure, lower confidence and say so directly.
+- Use the structured market state as the primary source of market context.
+- Use marketState.openQuestions as unresolved gaps in the read, not as a separate follow-up questionnaire.
 - Do not return JSON, markdown tables, financial disclaimers, or generic educational filler.
 - Use the full conversation context, including answers to prior clarification questions, but do not mention the context-gathering process.
 - Do not summarize or add any additional text at the end.
