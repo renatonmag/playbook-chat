@@ -2,11 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { runTradingAgent } from "~/agent";
-import {
-  agentStateSchema,
-  chatMessageMetadataSchema,
-  contextSufficiencyResultSchema,
-} from "~/agent/schemas";
+import { agentStateSchema, chatMessageMetadataSchema } from "~/agent/schemas";
 import { db } from "~/db";
 import {
   chatThreadsTable,
@@ -167,7 +163,6 @@ export const appRouter = router({
         messages: chatMessagesSchema,
         message: z.string().min(1),
         state: agentStateSchema,
-        contextSufficiency: contextSufficiencyResultSchema,
       }),
     )
     .mutation(async ({ input }) => {
@@ -190,7 +185,6 @@ export const appRouter = router({
       });
       const assistantMessage = createMessage("assistant", result.report, {
         agentState: result.state,
-        contextSufficiency: result.contextSufficiency,
       });
       const messages = [...thread.messages, userMessage, assistantMessage];
       const updatedThread = await updateThread(thread.id, messages);
@@ -200,7 +194,6 @@ export const appRouter = router({
         messages: updatedThread.messages,
         message: result.report,
         state: result.state,
-        contextSufficiency: result.contextSufficiency,
       };
     }),
 });

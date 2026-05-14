@@ -11,12 +11,6 @@ type ChatMessage = {
 
 type ChatMessageMetadata = {
   agentState?: "needs_context" | "analysis_ready" | "trade_plan_ready";
-  contextSufficiency?: {
-    context_sufficiency: "insufficient" | "sufficient";
-    context_request_header: string;
-    missing_context: string[];
-    questions: string[];
-  };
 };
 
 type ChatThread = {
@@ -383,12 +377,6 @@ export default function Chat() {
                         : "max-w-[80%] rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-800"
                     }
                   >
-                    <Show when={message.metadata?.agentState === "needs_context"}>
-                      <span class="mb-2 block text-xs font-semibold uppercase tracking-wide text-amber-700">
-                        Needs context
-                      </span>
-                    </Show>
-
                     <Show
                       when={shouldRenderMarkdown()}
                       fallback={<div class="whitespace-pre-wrap">{message.content}</div>}

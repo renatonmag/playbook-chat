@@ -59,6 +59,10 @@ body {
   margin: 0 0 0.75rem;
 }
 
+.report-markdown ul {
+  list-style-type: disc;
+}
+
 .report-markdown ol,
 .report-markdown ul {
   padding-left: 1.25rem;

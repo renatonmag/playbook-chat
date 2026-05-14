@@ -11,22 +11,15 @@ import {
 } from "@langchain/langgraph";
 import { getCurrentRunTree, traceable } from "langsmith/traceable";
 import { z } from "zod";
-import {
-  contextSufficiencyResultSchema,
-  tradingAgentResultSchema,
-} from "./schemas";
+import { tradingAgentResultSchema } from "./schemas";
 import { technicalAnalysisSystemPrompt } from "./prompts";
 import type {
-  ContextSufficiencyResult,
   MarketState,
   TradingAgentInput,
   TradingAgentResult,
 } from "./types";
 
 export type { TradingAgentInput, TradingAgentResult } from "./types";
-
-const CONTEXT_REQUEST_HEADER =
-  "Before I give the read, I need a bit more context:";
 
 const DEFAULT_LANGSMITH_PROJECT = "playbook-chat";
 const TRADING_MODEL_NAME = "gpt-5.4-mini";
@@ -119,6 +112,46 @@ const marketStateSchema: z.ZodType<MarketState> = z.object({
   openQuestions: z.array(z.string().trim().min(1)),
 });
 
+const marketStateResponseSchema = z.object({
+  cicle: z.object({
+    broaderMarketCicle: activeMarketCicleSchema,
+    innerMarketCicle: activeMarketCicleSchema,
+  }),
+  rangeType: rangeTypeSchema.nullable(),
+  locationInRange: rangeLocationSchema.nullable(),
+  sessionContext: z
+    .object({
+      barNumber: z.number().int().nonnegative().nullable(),
+      dayType: dayTypeSchema.nullable(),
+    })
+    .nullable(),
+  activeStructures: z.array(
+    z.object({
+      name: z.string().trim().min(1),
+      status: structureStatusSchema,
+      evidence: z.array(z.string().trim().min(1)),
+    }),
+  ),
+  currentBias: z.object({
+    primaryDirection: directionalBiasSchema,
+    currentDirection: directionalBiasSchema,
+    confidenceOfCurrentDirection: z.number().min(0).max(100),
+    reason: z.string().trim().min(1),
+  }),
+  latestEvent: z
+    .object({
+      description: z.string().trim().min(1),
+      tags: z.array(z.string().trim().min(1)),
+      direction: directionalBiasSchema,
+      changesPreviousRead: z.boolean(),
+      effect: z.string().trim().min(1),
+      invalidates: z.array(z.string().trim().min(1)),
+      supports: z.array(z.string().trim().min(1)),
+    })
+    .nullable(),
+  openQuestions: z.array(z.string().trim().min(1)),
+});
+
 const AgentState = new StateSchema({
   userInput: z.string(),
   detectedPatterns: z.array(z.string()).default([]),
@@ -162,7 +195,7 @@ function getTradingModel() {
 }
 
 function getMarketStateModel() {
-  return getTradingModel().withStructuredOutput(marketStateSchema, {
+  return getTradingModel().withStructuredOutput(marketStateResponseSchema, {
     name: "market_state_response",
     method: "functionCalling",
     strict: true,
@@ -220,18 +253,41 @@ function buildConversationTranscript(
   return lines.join("\n\n");
 }
 
-function createContextSufficiencyResult(
-  graphResult: AgentStateType,
-): ContextSufficiencyResult {
-  const openQuestions = graphResult.marketState?.openQuestions ?? [];
+function normalizeMarketState(
+  marketState: z.infer<typeof marketStateResponseSchema>,
+): MarketState {
+  const sessionContext =
+    marketState.sessionContext === null
+      ? undefined
+      : {
+          ...(marketState.sessionContext.barNumber !== null
+            ? { barNumber: marketState.sessionContext.barNumber }
+            : {}),
+          ...(marketState.sessionContext.dayType !== null
+            ? { dayType: marketState.sessionContext.dayType }
+            : {}),
+        };
 
-  return contextSufficiencyResultSchema.parse({
-    context_sufficiency:
-      openQuestions.length > 0 ? "insufficient" : "sufficient",
-    context_request_header: CONTEXT_REQUEST_HEADER,
-    missing_context: openQuestions.slice(0, 8),
-    questions: [],
-  });
+  const normalized = {
+    cicle: marketState.cicle,
+    activeStructures: marketState.activeStructures,
+    currentBias: marketState.currentBias,
+    openQuestions: marketState.openQuestions,
+    ...(marketState.rangeType !== null
+      ? { rangeType: marketState.rangeType }
+      : {}),
+    ...(marketState.locationInRange !== null
+      ? { locationInRange: marketState.locationInRange }
+      : {}),
+    ...(sessionContext && Object.keys(sessionContext).length > 0
+      ? { sessionContext }
+      : {}),
+    ...(marketState.latestEvent !== null
+      ? { latestEvent: marketState.latestEvent }
+      : {}),
+  };
+
+  return marketStateSchema.parse(normalized);
 }
 
 const detectPatterns: GraphNode<typeof AgentState> = async (
@@ -275,7 +331,7 @@ const retrieveDocs: GraphNode<typeof AgentState> = (
 const buildMarketState: GraphNode<typeof AgentState> = async (
   state,
 ): Promise<AgentStateUpdate> => {
-  const marketState = await getMarketStateModel().invoke(`
+  const marketStateResponse = await getMarketStateModel().invoke(`
 You are a market structure extraction assistant for an Al Brooks price action trading workflow.
 
 Build a conservative structured market state from the transcript and detected patterns.
@@ -297,11 +353,12 @@ Rules:
 - Use openQuestions for remaining high-signal unknowns that materially limit confidence.
 - openQuestions should contain concise missing-context statements, not conversational follow-up questions.
 - If no meaningful latest event is described, omit latestEvent.
+- When data is missing for nullable fields, return null instead of omitting the key.
 - confidenceOfCurrentDirection must be a number from 0 to 100.
 `);
 
   return {
-    marketState,
+    marketState: normalizeMarketState(marketStateResponse),
   };
 };
 
@@ -368,15 +425,9 @@ async function runTradingAgentImpl(
       throw new Error("Trading agent returned an empty report.");
     }
 
-    const contextSufficiency = createContextSufficiencyResult(graphResult);
-
     const result = tradingAgentResultSchema.parse({
-      state:
-        contextSufficiency.context_sufficiency === "insufficient"
-          ? "needs_context"
-          : "analysis_ready",
+      state: "analysis_ready",
       report,
-      contextSufficiency,
     });
 
     return result;

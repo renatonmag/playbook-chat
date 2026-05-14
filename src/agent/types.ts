@@ -1,10 +1,6 @@
 import type { z } from "zod";
 import type { ChatMessage } from "~/db/schema";
-import type {
-  agentStateSchema,
-  contextSufficiencyResultSchema,
-  tradingAgentResultSchema,
-} from "./schemas";
+import type { agentStateSchema, tradingAgentResultSchema } from "./schemas";
 
 export type AgentState = z.infer<typeof agentStateSchema>;
 
@@ -83,13 +79,6 @@ export type MarketState = {
   };
   openQuestions: string[];
 };
-
-export type ContextSufficiency =
-  ContextSufficiencyResult["context_sufficiency"];
-
-export type ContextSufficiencyResult = z.infer<
-  typeof contextSufficiencyResultSchema
->;
 
 export type TradingAgentInput = {
   prompt: string;
