@@ -11,8 +11,11 @@ import {
 } from "@langchain/langgraph";
 import { getCurrentRunTree, traceable } from "langsmith/traceable";
 import { z } from "zod";
-import { tradingAgentResultSchema } from "./schemas";
-import { technicalAnalysisSystemPrompt } from "./prompts";
+import { responseStyleSchema, tradingAgentResultSchema } from "./schemas";
+import {
+  freeformTradingSystemPrompt,
+  technicalAnalysisSystemPrompt,
+} from "./prompts";
 import type {
   MarketState,
   TradingAgentInput,
@@ -154,6 +157,7 @@ const marketStateResponseSchema = z.object({
 
 const AgentState = new StateSchema({
   userInput: z.string(),
+  responseStyle: responseStyleSchema.default("report"),
   detectedPatterns: z.array(z.string()).default([]),
   patternDocs: z.array(z.string()).default([]),
   marketState: marketStateSchema.optional(),
@@ -371,13 +375,19 @@ const generateReport: GraphNode<typeof AgentState> = async (
     throw new Error("Trading agent could not build market state.");
   }
 
+  const promptInput = {
+    userInput: state.userInput,
+    detectedPatterns: state.detectedPatterns,
+    patternDocs: state.patternDocs,
+    marketState: JSON.stringify(marketState, null, 2),
+  };
+  const prompt =
+    state.responseStyle === "freeform"
+      ? freeformTradingSystemPrompt(promptInput)
+      : technicalAnalysisSystemPrompt(promptInput);
+
   const result = await getTradingModel().invoke(
-    technicalAnalysisSystemPrompt({
-      userInput: state.userInput,
-      detectedPatterns: state.detectedPatterns,
-      patternDocs: state.patternDocs,
-      marketState: JSON.stringify(marketState, null, 2),
-    }),
+    prompt,
   );
 
   const report = contentToText(result.content).trim();
@@ -418,6 +428,7 @@ async function runTradingAgentImpl(
 
     const graphResult = await graph.invoke({
       userInput: transcript,
+      responseStyle: input.responseStyle,
     });
     const report = graphResult.report?.trim();
 

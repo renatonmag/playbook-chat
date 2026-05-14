@@ -2,7 +2,11 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { runTradingAgent } from "~/agent";
-import { agentStateSchema, chatMessageMetadataSchema } from "~/agent/schemas";
+import {
+  agentStateSchema,
+  chatMessageMetadataSchema,
+  responseStyleSchema,
+} from "~/agent/schemas";
 import { db } from "~/db";
 import {
   chatThreadsTable,
@@ -155,6 +159,7 @@ export const appRouter = router({
       z.object({
         threadId: z.string().uuid().optional(),
         message: z.string().trim().min(1),
+        responseStyle: responseStyleSchema.default("report"),
       }),
     )
     .output(
@@ -178,13 +183,17 @@ export const appRouter = router({
       }
 
       const thread = existingThread ?? (await createThread([]));
-      const userMessage = createMessage("user", input.message);
+      const userMessage = createMessage("user", input.message, {
+        responseStyle: input.responseStyle,
+      });
       const result = await runTradingAgent({
         prompt: input.message,
         history: thread.messages,
+        responseStyle: input.responseStyle,
       });
       const assistantMessage = createMessage("assistant", result.report, {
         agentState: result.state,
+        responseStyle: input.responseStyle,
       });
       const messages = [...thread.messages, userMessage, assistantMessage];
       const updatedThread = await updateThread(thread.id, messages);

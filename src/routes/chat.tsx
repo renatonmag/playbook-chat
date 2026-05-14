@@ -2,6 +2,8 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { renderMarkdown } from "~/lib/render-markdown";
 import { getTRPCClient } from "~/lib/trpc/client";
 
+type ResponseStyle = "report" | "freeform";
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -11,6 +13,7 @@ type ChatMessage = {
 
 type ChatMessageMetadata = {
   agentState?: "needs_context" | "analysis_ready" | "trade_plan_ready";
+  responseStyle?: ResponseStyle;
 };
 
 type ChatThread = {
@@ -28,10 +31,12 @@ function createMessageId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function isRenderableReport(message: ChatMessage) {
+function shouldRenderAssistantMarkdown(message: ChatMessage) {
   return (
     message.role === "assistant" &&
-    (message.metadata?.agentState === "analysis_ready" ||
+    (message.metadata?.responseStyle === "report" ||
+      message.metadata?.responseStyle === "freeform" ||
+      message.metadata?.agentState === "analysis_ready" ||
       message.metadata?.agentState === "trade_plan_ready")
   );
 }
@@ -41,6 +46,7 @@ export default function Chat() {
   const [threadId, setThreadId] = createSignal<string>();
   const [messages, setMessages] = createSignal<ChatMessage[]>([]);
   const [draft, setDraft] = createSignal("");
+  const [responseStyle, setResponseStyle] = createSignal<ResponseStyle>("report");
   const [isLoadingThread, setIsLoadingThread] = createSignal(true);
   const [isLoadingThreads, setIsLoadingThreads] = createSignal(true);
   const [isCreatingThread, setIsCreatingThread] = createSignal(false);
@@ -214,10 +220,14 @@ export default function Chat() {
     }
 
     const previousMessages = messages();
+    const selectedResponseStyle = responseStyle();
     const optimisticUserMessage: ChatMessage = {
       id: createMessageId(),
       role: "user",
-      content: message
+      content: message,
+      metadata: {
+        responseStyle: selectedResponseStyle,
+      },
     };
 
     setError("");
@@ -228,7 +238,8 @@ export default function Chat() {
     try {
       const response = await getTRPCClient().chat.mutate({
         threadId: threadId(),
-        message
+        message,
+        responseStyle: selectedResponseStyle,
       });
 
       setThreadId(response.threadId);
@@ -366,7 +377,7 @@ export default function Chat() {
             <For each={messages()}>
               {message => {
                 const shouldRenderMarkdown = () =>
-                  hasMounted() && isRenderableReport(message);
+                  hasMounted() && shouldRenderAssistantMarkdown(message);
 
                 return (
                 <div class={message.role === "user" ? "flex justify-end" : "flex justify-start"}>
@@ -403,7 +414,21 @@ export default function Chat() {
         </div>
 
         <div class="border-t border-slate-200 bg-white p-3 sm:p-4">
-          <div class="flex gap-3">
+          <div class="flex flex-col gap-3 sm:flex-row">
+            <label class="flex flex-col gap-1 text-xs font-medium text-slate-600 sm:w-32">
+              Style
+              <select
+                value={responseStyle()}
+                onChange={event =>
+                  setResponseStyle(event.currentTarget.value as ResponseStyle)
+                }
+                disabled={isSending()}
+                class="h-10 rounded-md border border-slate-300 bg-white px-2 text-sm font-medium text-slate-950 outline-none transition focus:border-sky-600 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+              >
+                <option value="report">Report</option>
+                <option value="freeform">Freeform</option>
+              </select>
+            </label>
             <textarea
               value={draft()}
               onInput={event => setDraft(event.currentTarget.value)}

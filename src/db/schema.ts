@@ -1,9 +1,10 @@
 import { sql } from "drizzle-orm";
 import { int, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import type { AgentState } from "~/agent/types";
+import type { AgentState, ResponseStyle } from "~/agent/types";
 
 export type ChatMessageMetadata = {
   agentState?: AgentState;
+  responseStyle?: ResponseStyle;
 };
 
 export type ChatMessage = {
