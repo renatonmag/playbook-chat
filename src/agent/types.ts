@@ -8,31 +8,32 @@ import type {
 
 export type AgentState = z.infer<typeof agentStateSchema>;
 
-export type MarketType =
-  | "bull_trend"
-  | "bear_trend"
+export type ActiveMarketCicle =
+  | "breakout"
+  | "tight_channel"
+  | "broad_channel"
   | "trading_range"
-  | "breakout_mode"
-  | "reversal_phase"
+  | "reversal"
   | "unclear";
 
 export type RangeType =
   | "tight_range"
   | "normal_range"
   | "wide_range"
-  | "expanding_range";
+  | "expanding_range"
+  | "no_range";
 
 export type RangeLocation =
   | "above_range"
   | "top"
-  | "upper_middle"
   | "middle"
-  | "lower_middle"
   | "bottom"
-  | "below_range";
+  | "below_range"
+  | "no_range";
 
 export type StructureStatus =
   | "active"
+  | "ended"
   | "weakening"
   | "completed"
   | "broken"
@@ -44,27 +45,16 @@ export type DirectionalBias = "bullish" | "bearish" | "neutral";
 export type DayType =
   | "trend_from_open"
   | "trading_range_day"
-  | "spike_and_channel_day"
+  | "trending_trading_ranges"
   | "broad_channel_day"
-  | "double_distribution_day"
-  | "possible_trend_day"
-  | "unclear";
-
-export type EventCategory =
-  | "trend_resumption"
-  | "trend_break"
-  | "breakout_attempt"
-  | "bull_breakout_attempt"
-  | "bear_breakout_attempt"
-  | "failed_breakout"
-  | "reversal_attempt"
-  | "exhaustion"
-  | "test_of_support"
-  | "test_of_resistance"
+  | "small_pullback_trend_day"
   | "unclear";
 
 export type MarketState = {
-  marketType: MarketType;
+  cicle: {
+    broaderMarketCicle: ActiveMarketCicle;
+    innerMarketCicle: ActiveMarketCicle;
+  };
   rangeType?: RangeType;
   locationInRange?: RangeLocation;
   sessionContext?: {
@@ -83,8 +73,9 @@ export type MarketState = {
     reason: string;
   };
   latestEvent?: {
-    newEvent: string;
-    eventCategory: EventCategory;
+    description: string;
+    tags: string[];
+    direction: DirectionalBias;
     changesPreviousRead: boolean;
     effect: string;
     invalidates: string[];

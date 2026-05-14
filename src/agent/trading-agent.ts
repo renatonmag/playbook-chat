@@ -34,18 +34,18 @@ const DEFAULT_LANGSMITH_PROJECT = "playbook-chat";
 const TRADING_MODEL_NAME = "gpt-5.4-mini";
 const BASE_TRACE_TAGS = ["trading-agent", "langgraph", "analysis"] as const;
 
-const TradingState = new StateSchema({
+const AgentState = new StateSchema({
   userInput: z.string(),
   detectedPatterns: z.array(z.string()).default([]),
   patternDocs: z.array(z.string()).default([]),
   contextSufficient: z.boolean().optional(),
-  missingContext: z.array(z.string()).default([]),
+  marketState: z.string().optional(),
   questions: z.array(z.string()).default([]),
   report: z.string().optional(),
 });
 
-type TradingStateType = typeof TradingState.State;
-type TradingStateUpdate = typeof TradingState.Update;
+type AgentStateType = typeof AgentState.State;
+type AgentStateUpdate = typeof AgentState.Update;
 
 const contextCheckerResponseSchema = z.object({
   sufficient: z.boolean(),
@@ -150,7 +150,7 @@ function buildConversationTranscript(
 }
 
 function createContextSufficiencyResult(
-  graphResult: TradingStateType,
+  graphResult: AgentStateType,
 ): ContextSufficiencyResult {
   if (graphResult.contextSufficient === false) {
     const questions =
@@ -174,9 +174,9 @@ function createContextSufficiencyResult(
   });
 }
 
-const detectPatterns: GraphNode<typeof TradingState> = async (
+const detectPatterns: GraphNode<typeof AgentState> = async (
   state,
-): Promise<TradingStateUpdate> => {
+): Promise<AgentStateUpdate> => {
   const result = await getTradingModel().invoke(`
 You are a technical analyst.
 
@@ -198,9 +198,9 @@ Return ONLY a comma separated list.
   };
 };
 
-const retrieveDocs: GraphNode<typeof TradingState> = (
+const retrieveDocs: GraphNode<typeof AgentState> = (
   state,
-): TradingStateUpdate => {
+): AgentStateUpdate => {
   const docs = state.detectedPatterns.flatMap((pattern) => {
     return Object.entries(PATTERN_DOCS)
       .filter(([key]) => pattern.includes(key))
@@ -212,9 +212,9 @@ const retrieveDocs: GraphNode<typeof TradingState> = (
   };
 };
 
-const checkContext: GraphNode<typeof TradingState> = async (
+const checkContext: GraphNode<typeof AgentState> = async (
   state,
-): Promise<TradingStateUpdate> => {
+): Promise<AgentStateUpdate> => {
   try {
     const json = await getContextCheckerModel().invoke(`
 You are a market context evaluator.
@@ -256,9 +256,9 @@ Rules:
   }
 };
 
-const askQuestions: GraphNode<typeof TradingState> = (
+const askQuestions: GraphNode<typeof AgentState> = (
   state,
-): TradingStateUpdate => {
+): AgentStateUpdate => {
   const questions =
     state.questions.length > 0
       ? state.questions.slice(0, 3)
@@ -273,9 +273,9 @@ ${questions.map((question) => `- ${question}`).join("\n")}
   };
 };
 
-const generateReport: GraphNode<typeof TradingState> = async (
+const generateReport: GraphNode<typeof AgentState> = async (
   state,
-): Promise<TradingStateUpdate> => {
+): Promise<AgentStateUpdate> => {
   const result = await getTradingModel().invoke(
     technicalAnalysisSystemPrompt({
       userInput: state.userInput,
@@ -295,7 +295,7 @@ const generateReport: GraphNode<typeof TradingState> = async (
   };
 };
 
-const graph = new StateGraph(TradingState)
+const graph = new StateGraph(AgentState)
   .addNode("detect_patterns", detectPatterns)
   .addNode("retrieve_docs", retrieveDocs)
   .addNode("check_context", checkContext)
