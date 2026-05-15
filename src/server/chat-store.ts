@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { chatMessageMetadataSchema } from "~/agent/schemas";
+import type { MarketState } from "~/agent/types";
 import { db } from "~/db";
 import {
   chatThreadsTable,
@@ -51,12 +52,16 @@ export async function getThreadById(id: string) {
   return thread ?? null;
 }
 
-export async function createThread(messages: ChatMessage[]) {
+export async function createThread(
+  messages: ChatMessage[],
+  marketState: MarketState | null = null,
+) {
   const id = crypto.randomUUID();
 
   await db.insert(chatThreadsTable).values({
     id,
     messages,
+    marketState,
   });
 
   const thread = await getThreadById(id);
@@ -71,13 +76,29 @@ export async function createThread(messages: ChatMessage[]) {
   return thread;
 }
 
-export async function updateThread(id: string, messages: ChatMessage[]) {
+export async function updateThread(
+  id: string,
+  messages: ChatMessage[],
+  options?: {
+    marketState?: MarketState | null;
+  },
+) {
+  const updates: {
+    messages: ChatMessage[];
+    updatedAt: Date;
+    marketState?: MarketState | null;
+  } = {
+    messages,
+    updatedAt: new Date(),
+  };
+
+  if (options && "marketState" in options) {
+    updates.marketState = options.marketState;
+  }
+
   await db
     .update(chatThreadsTable)
-    .set({
-      messages,
-      updatedAt: new Date(),
-    })
+    .set(updates)
     .where(eq(chatThreadsTable.id, id));
 
   const thread = await getThreadById(id);

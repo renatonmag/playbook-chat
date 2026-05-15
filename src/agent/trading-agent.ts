@@ -10,7 +10,17 @@ import {
 } from "@langchain/langgraph";
 import { traceable } from "langsmith/traceable";
 import { z } from "zod";
-import { responseStyleSchema, tradingAgentResultSchema } from "./schemas";
+import {
+  activeMarketCicleSchema,
+  dayTypeSchema,
+  directionalBiasSchema,
+  marketStateSchema,
+  rangeLocationSchema,
+  rangeTypeSchema,
+  responseStyleSchema,
+  structureStatusSchema,
+  tradingAgentResultSchema,
+} from "./schemas";
 import {
   freeformTradingSystemPrompt,
   technicalAnalysisSystemPrompt,
@@ -47,93 +57,6 @@ const TRADING_AGENT_STEP_LABELS = {
   build_market_state: "Building market state",
   generate_report: "Generating report",
 } as const satisfies Record<TradingAgentStep, string>;
-
-const activeMarketCicleSchema = z.enum([
-  "breakout",
-  "tight_channel",
-  "broad_channel",
-  "trading_range",
-  "reversal",
-  "unclear",
-]);
-
-const rangeTypeSchema = z.enum([
-  "tight_range",
-  "normal_range",
-  "wide_range",
-  "expanding_range",
-  "no_range",
-]);
-
-const rangeLocationSchema = z.enum([
-  "above_range",
-  "top",
-  "middle",
-  "bottom",
-  "below_range",
-  "no_range",
-]);
-
-const structureStatusSchema = z.enum([
-  "active",
-  "ended",
-  "weakening",
-  "completed",
-  "broken",
-  "failed",
-  "unclear",
-]);
-
-const directionalBiasSchema = z.enum(["bullish", "bearish", "neutral"]);
-
-const dayTypeSchema = z.enum([
-  "trend_from_open",
-  "trading_range_day",
-  "trending_trading_ranges",
-  "broad_channel_day",
-  "small_pullback_trend_day",
-  "unclear",
-]);
-
-const marketStateSchema: z.ZodType<MarketState> = z.object({
-  cicle: z.object({
-    broaderMarketCicle: activeMarketCicleSchema,
-    innerMarketCicle: activeMarketCicleSchema,
-  }),
-  rangeType: rangeTypeSchema.optional(),
-  locationInRange: rangeLocationSchema.optional(),
-  sessionContext: z
-    .object({
-      barNumber: z.number().int().nonnegative().optional(),
-      dayType: dayTypeSchema.optional(),
-    })
-    .optional(),
-  activeStructures: z.array(
-    z.object({
-      name: z.string().trim().min(1),
-      status: structureStatusSchema,
-      evidence: z.array(z.string().trim().min(1)),
-    }),
-  ),
-  currentBias: z.object({
-    primaryDirection: directionalBiasSchema,
-    currentDirection: directionalBiasSchema,
-    confidenceOfCurrentDirection: z.number().min(0).max(100),
-    reason: z.string().trim().min(1),
-  }),
-  latestEvent: z
-    .object({
-      description: z.string().trim().min(1),
-      tags: z.array(z.string().trim().min(1)),
-      direction: directionalBiasSchema,
-      changesPreviousRead: z.boolean(),
-      effect: z.string().trim().min(1),
-      invalidates: z.array(z.string().trim().min(1)),
-      supports: z.array(z.string().trim().min(1)),
-    })
-    .optional(),
-  openQuestions: z.array(z.string().trim().min(1)),
-});
 
 const marketStateResponseSchema = z.object({
   cicle: z.object({
@@ -175,15 +98,24 @@ const marketStateResponseSchema = z.object({
   openQuestions: z.array(z.string().trim().min(1)),
 });
 
+const conversationTranscriptMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string(),
+});
+
 const AgentState = new StateSchema({
-  userInput: z.string(),
+  userInput: z.array(conversationTranscriptMessageSchema),
   responseStyle: responseStyleSchema.default("report"),
+  previousMarketState: marketStateSchema.nullable().optional(),
   detectedPatterns: z.array(z.string()).default([]),
   patternDocs: z.array(z.string()).default([]),
   marketState: marketStateSchema.optional(),
   report: z.string().optional(),
 });
 
+type ConversationTranscriptMessage = z.infer<
+  typeof conversationTranscriptMessageSchema
+>;
 type AgentStateType = typeof AgentState.State;
 type AgentStateUpdate = typeof AgentState.Update;
 
@@ -262,19 +194,51 @@ function contentToText(content: unknown) {
   return "";
 }
 
+function extractReportFromNodeOutput(output: unknown) {
+  if (
+    output &&
+    typeof output === "object" &&
+    "report" in output &&
+    typeof output.report === "string"
+  ) {
+    return output.report.trim();
+  }
+
+  return "";
+}
+
+function extractMarketStateFromNodeOutput(output: unknown) {
+  if (
+    output &&
+    typeof output === "object" &&
+    "marketState" in output
+  ) {
+    return marketStateSchema.parse(output.marketState);
+  }
+
+  return undefined;
+}
+
 function buildConversationTranscript(
   history: TradingAgentInput["history"],
   prompt: string,
+): ConversationTranscriptMessage[] {
+  return [
+    ...history.map(({ role, content }) => ({ role, content })),
+    { role: "user", content: prompt },
+  ];
+}
+
+function conversationTranscriptToText(
+  messages: ConversationTranscriptMessage[],
 ) {
-  const lines = history.map((message) => {
-    const role = message.role === "assistant" ? "Assistant" : "User";
+  return messages
+    .map((message) => {
+      const role = message.role === "assistant" ? "Assistant" : "User";
 
-    return `${role}: ${message.content}`;
-  });
-
-  lines.push(`User: ${prompt}`);
-
-  return lines.join("\n\n");
+      return `${role}: ${message.content}`;
+    })
+    .join("\n\n");
 }
 
 function normalizeMarketState(
@@ -316,17 +280,22 @@ function normalizeMarketState(
 
 const detectPatterns: GraphNode<typeof AgentState> = async (
   state,
+  config,
 ): Promise<AgentStateUpdate> => {
-  const result = await getTradingModel().invoke(`
+  const transcript = conversationTranscriptToText(state.userInput);
+  const result = await getTradingModel().invoke(
+    `
 You are a technical analyst.
 
 Extract the relevant Al Brooks style patterns from this description.
 
 Market description:
-${state.userInput}
+${transcript}
 
 Return ONLY a comma separated list.
-`);
+`,
+    config,
+  );
 
   const patterns = contentToText(result.content)
     .split(",")
@@ -354,14 +323,20 @@ const retrieveDocs: GraphNode<typeof AgentState> = (
 
 const buildMarketState: GraphNode<typeof AgentState> = async (
   state,
+  config,
 ): Promise<AgentStateUpdate> => {
-  const marketStateResponse = await getMarketStateModel().invoke(`
+  const transcript = conversationTranscriptToText(state.userInput);
+  const marketStateResponse = await getMarketStateModel().invoke(
+    `
 You are a market structure extraction assistant for an Al Brooks price action trading workflow.
 
 Build a conservative structured market state from the transcript and detected patterns.
 
 Conversation transcript:
-${state.userInput}
+${transcript}
+
+Previous persisted market state:
+${state.previousMarketState ? JSON.stringify(state.previousMarketState, null, 2) : "None"}
 
 Detected patterns:
 ${state.detectedPatterns.join(", ")}
@@ -371,6 +346,11 @@ ${state.patternDocs.join("\n")}
 
 Rules:
 - Extract only what is supported by the transcript.
+- Use previous persisted market state only as prior context.
+- The new user observation is the source of truth for the latest event.
+- Preserve still-valid prior structures only when the new observation does not invalidate them.
+- If the new observation contradicts the previous state, update the state and explain the change in latestEvent.effect.
+- Do not carry forward weak prior assumptions as confirmed facts.
 - Use "unclear" enum values when evidence is weak or missing.
 - Do not invent price levels, indicators, timeframes, or events.
 - Keep activeStructures evidence grounded in quoted or closely paraphrased transcript details.
@@ -379,7 +359,9 @@ Rules:
 - If no meaningful latest event is described, omit latestEvent.
 - When data is missing for nullable fields, return null instead of omitting the key.
 - confidenceOfCurrentDirection must be a number from 0 to 100.
-`);
+`,
+    config,
+  );
 
   return {
     marketState: normalizeMarketState(marketStateResponse),
@@ -393,8 +375,9 @@ function buildReportPrompt(state: AgentStateType) {
     throw new Error("Trading agent could not build market state.");
   }
 
+  const transcript = conversationTranscriptToText(state.userInput);
   const promptInput = {
-    userInput: state.userInput,
+    userInput: transcript,
     detectedPatterns: state.detectedPatterns,
     patternDocs: state.patternDocs,
     marketState: JSON.stringify(marketState, null, 2),
@@ -409,20 +392,27 @@ function buildReportPrompt(state: AgentStateType) {
 
 const generateReport: GraphNode<typeof AgentState> = async (
   state,
+  config,
 ): Promise<AgentStateUpdate> => {
   const prompt = buildReportPrompt(state);
-  const result = await getTradingModel().invoke(
+  const chunks = await getTradingModel().stream(
     prompt,
+    config,
   );
+  let report = "";
 
-  const report = contentToText(result.content).trim();
+  for await (const chunk of chunks) {
+    report += contentToText(chunk.content);
+  }
 
-  if (!report) {
+  const trimmedReport = report.trim();
+
+  if (!trimmedReport) {
     throw new Error("Trading agent returned an empty report.");
   }
 
   return {
-    report,
+    report: trimmedReport,
   };
 };
 
@@ -436,16 +426,6 @@ const graph = new StateGraph(AgentState)
   .addEdge("retrieve_docs", "build_market_state")
   .addEdge("build_market_state", "generate_report")
   .addEdge("generate_report", END)
-  .compile();
-
-const preparationGraph = new StateGraph(AgentState)
-  .addNode("detect_patterns", detectPatterns)
-  .addNode("retrieve_docs", retrieveDocs)
-  .addNode("build_market_state", buildMarketState)
-  .addEdge(START, "detect_patterns")
-  .addEdge("detect_patterns", "retrieve_docs")
-  .addEdge("retrieve_docs", "build_market_state")
-  .addEdge("build_market_state", END)
   .compile();
 
 function validatePrompt(input: TradingAgentInput) {
@@ -465,6 +445,7 @@ function buildGraphInput(input: TradingAgentInput) {
   return {
     userInput: transcript,
     responseStyle: input.responseStyle,
+    previousMarketState: input.previousMarketState ?? null,
   };
 }
 
@@ -498,6 +479,7 @@ async function runTradingAgentImpl(
     const result = tradingAgentResultSchema.parse({
       state: "analysis_ready",
       report,
+      marketState: graphResult.marketState,
     });
 
     return result;
@@ -524,82 +506,74 @@ export async function* streamTradingAgent(
 ): AsyncGenerator<TradingAgentTextEvent, TradingAgentResult> {
   try {
     const graphInput = buildGraphInput(input);
-    const latestState: AgentStateType = {
-      ...graphInput,
-      detectedPatterns: [],
-      patternDocs: [],
-    };
-    let nextStepIndex = 0;
-
-    yield createStepEvent(TRADING_AGENT_STEPS[nextStepIndex], "running");
-
-    const stream = await preparationGraph.stream(graphInput, {
-      streamMode: "updates",
+    const events = graph.streamEvents(graphInput, {
+      version: "v2",
       ...(signal ? { signal } : {}),
     });
+    let streamedReport = "";
+    let finalReport = "";
+    let marketState: MarketState | undefined;
 
-    for await (const chunk of stream) {
-      const update = chunk as Partial<Record<TradingAgentStep, AgentStateUpdate>>;
+    for await (const event of events) {
+      if (event.event === "on_chain_start") {
+        const node = event.metadata?.langgraph_node;
 
-      for (const [nodeName, nodeUpdate] of Object.entries(update)) {
-        if (!isTradingAgentStep(nodeName)) {
-          continue;
+        if (isTradingAgentStep(node) && event.name === node) {
+          yield createStepEvent(node, "running");
         }
+      }
 
-        if (nodeUpdate && typeof nodeUpdate === "object") {
-          Object.assign(latestState, nodeUpdate);
+      if (event.event === "on_chain_end") {
+        const node = event.metadata?.langgraph_node;
+
+        if (isTradingAgentStep(node) && event.name === node) {
+          yield createStepEvent(node, "completed");
+
+          if (node === "generate_report") {
+            const report = extractReportFromNodeOutput(event.data?.output);
+
+            if (report) {
+              finalReport = report;
+            }
+          }
+
+          if (node === "build_market_state") {
+            marketState = extractMarketStateFromNodeOutput(event.data?.output);
+          }
         }
+      }
 
-        yield createStepEvent(nodeName, "completed");
+      if (
+        event.event === "on_chat_model_stream" &&
+        event.metadata?.langgraph_node === "generate_report"
+      ) {
+        const delta = contentToText(event.data?.chunk?.content);
 
-        const completedStepIndex = TRADING_AGENT_STEPS.indexOf(nodeName);
+        if (delta) {
+          streamedReport += delta;
 
-        if (completedStepIndex >= nextStepIndex) {
-          nextStepIndex = completedStepIndex + 1;
-        }
-
-        const nextStep = TRADING_AGENT_STEPS[nextStepIndex];
-
-        if (nextStep) {
-          yield createStepEvent(nextStep, "running");
+          yield {
+            type: "text_delta",
+            delta,
+          };
         }
       }
     }
 
-    const prompt = buildReportPrompt(latestState);
-    let report = "";
+    const report = finalReport.trim() || streamedReport.trim();
 
-    const chunks = await getTradingModel().stream(
-      prompt,
-      signal ? { signal } : undefined,
-    );
-
-    for await (const chunk of chunks) {
-      const delta = contentToText(chunk.content);
-
-      if (!delta) {
-        continue;
-      }
-
-      report += delta;
-
-      yield {
-        type: "text_delta",
-        delta,
-      };
-    }
-
-    yield createStepEvent("generate_report", "completed");
-
-    const trimmedReport = report.trim();
-
-    if (!trimmedReport) {
+    if (!report) {
       throw new Error("Trading agent returned an empty report.");
+    }
+
+    if (!marketState) {
+      throw new Error("Trading agent did not return a market state.");
     }
 
     return tradingAgentResultSchema.parse({
       state: "analysis_ready",
-      report: trimmedReport,
+      report,
+      marketState,
     });
   } catch (error) {
     console.error("Error streaming trading agent:", error);

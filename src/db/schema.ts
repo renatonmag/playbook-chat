@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { int, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import type { AgentState, ResponseStyle } from "~/agent/types";
+import type { AgentState, MarketState, ResponseStyle } from "~/agent/types";
 
 export type ChatMessageMetadata = {
   agentState?: AgentState;
@@ -34,6 +34,9 @@ export const chatThreadsTable = sqliteTable("chat_threads", {
     .$type<ChatMessage[]>()
     .notNull()
     .default(sql`'[]'`),
+  marketState: text("market_state", { mode: "json" })
+    .$type<MarketState | null>()
+    .default(sql`NULL`),
   createdAt: int("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),

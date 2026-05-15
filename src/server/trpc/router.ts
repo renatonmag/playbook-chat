@@ -56,13 +56,16 @@ async function sendChatMessage(input: z.infer<typeof chatInputSchema>) {
     prompt: input.message,
     history: thread.messages,
     responseStyle: input.responseStyle,
+    previousMarketState: thread.marketState ?? null,
   });
   const assistantMessage = createMessage("assistant", result.report, {
     agentState: result.state,
     responseStyle: input.responseStyle,
   });
   const messages = [...thread.messages, userMessage, assistantMessage];
-  const updatedThread = await updateThread(thread.id, messages);
+  const updatedThread = await updateThread(thread.id, messages, {
+    marketState: result.marketState,
+  });
 
   return {
     threadId: updatedThread.id,
@@ -148,6 +151,7 @@ export const appRouter = router({
             prompt: input.message,
             history: thread.messages,
             responseStyle: input.responseStyle,
+            previousMarketState: thread.marketState ?? null,
           },
           signal,
         );
@@ -190,7 +194,9 @@ export const appRouter = router({
           metadata: finalAssistantMetadata,
         };
         const finalMessages = [...messagesWithUser, assistantMessage];
-        const updatedThread = await updateThread(userThread.id, finalMessages);
+        const updatedThread = await updateThread(userThread.id, finalMessages, {
+          marketState: result.marketState,
+        });
 
         if (!assistantStarted) {
           yield {
