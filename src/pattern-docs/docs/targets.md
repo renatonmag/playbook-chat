@@ -1,0 +1,1 @@
+O movimento atingiu algum alvo?

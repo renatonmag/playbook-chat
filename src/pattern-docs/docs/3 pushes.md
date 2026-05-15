@@ -1,0 +1,1 @@
+O movimento finalizou 3 puxadas com climaxes consecutivos ou até um suporte ou resitência?

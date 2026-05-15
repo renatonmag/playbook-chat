@@ -1,0 +1,1 @@
+O breakout mode está no tempo atual ou no tempo maior (1h)?

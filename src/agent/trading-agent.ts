@@ -480,7 +480,6 @@ function buildReportPrompt(state: AgentStateType) {
   }
 
   return technicalAnalysisSystemPrompt({
-    userInput: transcript,
     detectedPatterns: state.detectedPatterns,
     previousMarketState: state.previousMarketState ?? null,
     marketState,

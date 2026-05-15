@@ -1,0 +1,1 @@
+Ha regeição de preços acima ou abaixo de barras consecutivas na região? 

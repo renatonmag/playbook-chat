@@ -1,0 +1,1 @@
+Em qual ciclo está: rompimento, canal estreito, canal amplo ou lateralidade

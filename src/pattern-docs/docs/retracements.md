@@ -1,0 +1,1 @@
+As retrações tem menos de 50%, 50%, ou mais de 50%?

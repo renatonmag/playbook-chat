@@ -1,0 +1,1 @@
+Alguma barra especial formando uma nova confirmação da região?
