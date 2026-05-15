@@ -26,6 +26,7 @@ import {
   freeformTradingSystemPrompt,
   technicalAnalysisSystemPrompt,
 } from "./prompts";
+import { AVAILABLE_PATTERNS, PATTERN_DOCS } from "../pattern-docs/patterns";
 import type {
   MarketState,
   TradingAgentStep,
@@ -101,6 +102,14 @@ const latestEventAnalysisSchema = z.object({
   supports: z.array(z.string().trim().min(1)),
 });
 
+const availablePatternSchema = z.enum(
+  AVAILABLE_PATTERNS as [string, ...string[]],
+);
+
+const selectedPatternDocsSchema = z.object({
+  patterns: z.array(availablePatternSchema).max(6),
+});
+
 const conversationTranscriptMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
@@ -122,16 +131,6 @@ type ConversationTranscriptMessage = z.infer<
 >;
 type AgentStateType = typeof AgentState.State;
 type AgentStateUpdate = typeof AgentState.Update;
-
-const PATTERN_DOCS: Record<string, string> = {
-  "failed breakout":
-    "Failed breakouts often lead to reversals or trading ranges.",
-  triangle: "Triangles are breakout mode patterns with balanced pressure.",
-  breakout_mode:
-    "Breakout mode means either side can win. Traders wait for confirmation.",
-  trading_range:
-    "Trading ranges favor fading breakouts and disappoint trend traders.",
-};
 
 let llm: ChatOpenAI | undefined;
 
@@ -165,6 +164,14 @@ function getMarketStateModel() {
 function getLatestEventModel() {
   return getTradingModel().withStructuredOutput(latestEventAnalysisSchema, {
     name: "latest_event_analysis",
+    method: "functionCalling",
+    strict: true,
+  });
+}
+
+function getPatternDocSelectionModel() {
+  return getTradingModel().withStructuredOutput(selectedPatternDocsSchema, {
+    name: "selected_pattern_docs",
     method: "functionCalling",
     strict: true,
   });
@@ -391,17 +398,47 @@ Rules:
   };
 };
 
-const retrieveDocs: GraphNode<typeof AgentState> = (
+const retrieveDocs: GraphNode<typeof AgentState> = async (
   state,
-): AgentStateUpdate => {
-  const docs = state.detectedPatterns.flatMap((pattern) => {
-    return Object.entries(PATTERN_DOCS)
-      .filter(([key]) => pattern.includes(key))
-      .map(([, value]) => value);
-  });
+  config,
+): Promise<AgentStateUpdate> => {
+  if (state.detectedPatterns.length === 0) {
+    return {
+      patternDocs: [],
+    };
+  }
+
+  const selection = await getPatternDocSelectionModel().invoke(
+    `
+You select local pattern documentation keys for a trading assistant.
+
+Detected pattern labels may be loose, translated, pluralized, abbreviated, or conceptually related.
+Map them to the most relevant keys from AVAILABLE_PATTERNS.
+
+<detected_patterns>
+${state.detectedPatterns.join(", ")}
+</detected_patterns>
+
+<available_patterns>
+${AVAILABLE_PATTERNS.join(", ")}
+</available_patterns>
+
+Rules:
+- Return only keys that exist in AVAILABLE_PATTERNS.
+- Do not invent keys.
+- Prefer fewer, more relevant docs.
+- Return at most 6 keys.
+- Return [] when no available pattern is meaningfully relevant.
+`,
+    config,
+  );
+
+  const docs = selection.patterns
+    .filter((key) => key in PATTERN_DOCS)
+    .map((key) => `${key}: ${PATTERN_DOCS[key]}`);
 
   return {
-    patternDocs: [...new Set(docs)],
+    patternDocs: docs,
   };
 };
 
@@ -422,6 +459,10 @@ Build a conservative structured market state from the transcript and detected pa
 ${state.previousMarketState ? JSON.stringify(state.previousMarketState, null, 2) : "None"}
 </previous_market_state>
 
+<important_patterns_questions>
+${state.patternDocs.join("\n")}
+</important_patterns_questions>
+
 <detected_patterns>
 ${state.detectedPatterns.join(", ")}
 </detected_patterns>
@@ -432,17 +473,13 @@ ${state.latestEvent ? JSON.stringify(state.latestEvent, null, 2) : "None"}
 
 Rules:
 - Extract only what is supported by the transcript.
-- Use previous_market_state state only as prior context.
-- Treat latest_extracted_event as the source of truth for marketState.latestEvent when it is present.
-- If latest_extracted_event is None, only set latestEvent if the current transcript clearly contains a meaningful new observation.
 - Preserve still-valid prior structures only when the new observation does not invalidate them.
-- If the new observation contradicts the previous state, update the state and explain the change in latestEvent.effect.
 - Do not carry forward weak prior assumptions as confirmed facts.
 - Use "unclear" enum values when evidence is weak or missing.
 - Do not invent price levels, indicators, timeframes, or events.
 - Keep activeStructures evidence grounded in quoted or closely paraphrased transcript details.
 - Use openQuestions for remaining high-signal unknowns that materially limit confidence.
-- openQuestions should contain concise missing-context statements, not conversational follow-up questions.
+- openQuestions should be based in important_patterns_questions.
 - If no meaningful latest event is described, omit latestEvent.
 - When data is missing for nullable fields, return null instead of omitting the key.
 - confidenceOfCurrentDirection must be a number from 0 to 100.

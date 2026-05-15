@@ -11,7 +11,7 @@ Channel
 Trading range
 Pullback
 Reversal`,
-  cycles: `Em qual ciclo está: rompimento, canal estreito, canal amplo ou lateralidade`,
+  cycles: `Em qual ciclo está: rompimento, canal estreito, canal amplo ou lateralidade?`,
   "double-confirmation": `Alguma barra especial formando uma nova confirmação da região?`,
   "late-in-trend": `A tendência é forte e persistente, possui 15+ barras, canal estreito longo, muitas barras sem tocar a média?
 A tendência possui muitas barras porém climática, um microcanal por exemplo?`,
