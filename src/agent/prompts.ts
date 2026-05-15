@@ -126,9 +126,9 @@ export function technicalAnalysisSystemPrompt({
   ${patternDocs.join("\n")}
   </pattern_knowledge>
   
-  <previous_market_state>
+  <structured_market_state>
   ${JSON.stringify(marketState, null, 2)}
-  </previous_market_state>
+  </structured_market_state>
   
   OUTPUT CONTRACT:
   
@@ -184,8 +184,8 @@ export function technicalAnalysisSystemPrompt({
   - Use bullet points only, except for the scenario path code block.
   - Keep phrases short and direct.
   - Do not invent price levels, indicators, timeframes, volume details, or signals not provided.
-  - Use previous_market_state as the primary source of context.
-  - Use previous_market_state.openQuestions only as uncertainty inside the reading, not as a separate questionnaire.
+  - Use structured_market_state as the primary source of context.
+  - Use structured_market_state.openQuestions only as uncertainty inside the reading, not as a separate questionnaire.
   - Do not return JSON.
   - Do not use markdown tables.
   - Do not add financial disclaimers.

@@ -59,6 +59,16 @@ export const dayTypeSchema = z.enum([
   "unclear",
 ]);
 
+export const latestEventSchema = z.object({
+  description: z.string().trim().min(1),
+  tags: z.array(z.string().trim().min(1)),
+  direction: directionalBiasSchema,
+  changesPreviousRead: z.boolean(),
+  effect: z.string().trim().min(1),
+  invalidates: z.array(z.string().trim().min(1)),
+  supports: z.array(z.string().trim().min(1)),
+});
+
 export const marketStateSchema = z.object({
   cicle: z.object({
     broaderMarketCicle: activeMarketCicleSchema,
@@ -85,17 +95,7 @@ export const marketStateSchema = z.object({
     confidenceOfCurrentDirection: z.number().min(0).max(100),
     reason: z.string().trim().min(1),
   }),
-  latestEvent: z
-    .object({
-      description: z.string().trim().min(1),
-      tags: z.array(z.string().trim().min(1)),
-      direction: directionalBiasSchema,
-      changesPreviousRead: z.boolean(),
-      effect: z.string().trim().min(1),
-      invalidates: z.array(z.string().trim().min(1)),
-      supports: z.array(z.string().trim().min(1)),
-    })
-    .optional(),
+  latestEvent: latestEventSchema.optional(),
   openQuestions: z.array(z.string().trim().min(1)),
 });
 
@@ -112,6 +112,7 @@ export const tradingAgentResultSchema = z.object({
 
 export const tradingAgentStepSchema = z.enum([
   "detect_patterns",
+  "extract_latest_event",
   "retrieve_docs",
   "build_market_state",
   "generate_report",

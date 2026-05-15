@@ -14,6 +14,7 @@ import {
   activeMarketCicleSchema,
   dayTypeSchema,
   directionalBiasSchema,
+  latestEventSchema,
   marketStateSchema,
   rangeLocationSchema,
   rangeTypeSchema,
@@ -47,12 +48,14 @@ const TRADING_MODEL_NAME = "gpt-5.4-mini";
 const BASE_TRACE_TAGS = ["trading-agent", "langgraph", "analysis"] as const;
 const TRADING_AGENT_STEPS = [
   "detect_patterns",
+  "extract_latest_event",
   "retrieve_docs",
   "build_market_state",
   "generate_report",
 ] as const satisfies readonly TradingAgentStep[];
 const TRADING_AGENT_STEP_LABELS = {
   detect_patterns: "Detecting patterns",
+  extract_latest_event: "Extracting latest event",
   retrieve_docs: "Retrieving pattern context",
   build_market_state: "Building market state",
   generate_report: "Generating report",
@@ -84,19 +87,20 @@ const marketStateResponseSchema = z.object({
     confidenceOfCurrentDirection: z.number().min(0).max(100),
     reason: z.string().trim().min(1),
   }),
-  latestEvent: z
-    .object({
-      description: z.string().trim().min(1),
-      tags: z.array(z.string().trim().min(1)),
-      direction: directionalBiasSchema,
-      changesPreviousRead: z.boolean(),
-      effect: z.string().trim().min(1),
-      invalidates: z.array(z.string().trim().min(1)),
-      supports: z.array(z.string().trim().min(1)),
-    })
-    .nullable(),
+  latestEvent: latestEventSchema.nullable(),
   openQuestions: z.array(z.string().trim().min(1)),
 });
+
+const latestEventAnalysisSchema = z
+  .object({
+    tags: z.array(z.string().trim().min(1)),
+    direction: directionalBiasSchema,
+    changesPreviousRead: z.boolean(),
+    effect: z.string().trim().min(1),
+    invalidates: z.array(z.string().trim().min(1)),
+    supports: z.array(z.string().trim().min(1)),
+  })
+  .nullable();
 
 const conversationTranscriptMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -108,6 +112,7 @@ const AgentState = new StateSchema({
   responseStyle: responseStyleSchema.default("report"),
   previousMarketState: marketStateSchema.nullable().optional(),
   detectedPatterns: z.array(z.string()).default([]),
+  latestEvent: latestEventSchema.optional(),
   patternDocs: z.array(z.string()).default([]),
   marketState: marketStateSchema.optional(),
   report: z.string().optional(),
@@ -153,6 +158,14 @@ function getTradingModel() {
 function getMarketStateModel() {
   return getTradingModel().withStructuredOutput(marketStateResponseSchema, {
     name: "market_state_response",
+    method: "functionCalling",
+    strict: true,
+  });
+}
+
+function getLatestEventModel() {
+  return getTradingModel().withStructuredOutput(latestEventAnalysisSchema, {
+    name: "latest_event_analysis",
     method: "functionCalling",
     strict: true,
   });
@@ -241,6 +254,15 @@ function conversationTranscriptToText(
     .join("\n\n");
 }
 
+function getLatestUserMessage(messages: ConversationTranscriptMessage[]) {
+  return (
+    [...messages]
+      .reverse()
+      .find((message) => message.role === "user")
+      ?.content.trim() ?? ""
+  );
+}
+
 function normalizeMarketState(
   marketState: z.infer<typeof marketStateResponseSchema>,
 ): MarketState {
@@ -307,6 +329,60 @@ Return ONLY a comma separated list.
   };
 };
 
+const extractLatestEvent: GraphNode<typeof AgentState> = async (
+  state,
+  config,
+): Promise<AgentStateUpdate> => {
+  const latestUserMessage = getLatestUserMessage(state.userInput);
+
+  if (!latestUserMessage) {
+    return {};
+  }
+
+  const analysis = await getLatestEventModel().invoke(
+    `
+You extract the latest market event for a price action trading workflow.
+
+Return structured analysis for the latest user message, or return null when the message does not contain a new market observation.
+
+Latest user message:
+${latestUserMessage}
+
+Previous persisted market state:
+${state.previousMarketState ? JSON.stringify(state.previousMarketState, null, 2) : "None"}
+
+Detected patterns:
+${state.detectedPatterns.join(", ")}
+
+Rules:
+- Analyze only the latest user message as the possible new event.
+- Use previous persisted market state only to decide whether the new event changes, confirms, weakens, or invalidates the prior read.
+- Do not summarize, translate, rewrite, correct, or paraphrase the latest user message.
+- Do not include a description field. The application will assign description exactly from the latest user message.
+- Return null if the latest user message is a conceptual question, UI instruction, or other text without a new chart or market observation.
+- tags must be short technical labels supported by the latest user message.
+- direction is the immediate pressure implied by the latest user message: bullish, bearish, or neutral.
+- changesPreviousRead is true only when the latest user message materially confirms, weakens, or invalidates the previous market state.
+- effect describes the technical effect of the latest user message compared with the previous market state.
+- invalidates lists prior structures or setups weakened by the latest user message.
+- supports lists structures or patterns strengthened by the latest user message.
+- Do not invent price levels, indicators, timeframes, or patterns not supported by the latest user message and prior context.
+`,
+    config,
+  );
+
+  if (!analysis) {
+    return {};
+  }
+
+  return {
+    latestEvent: latestEventSchema.parse({
+      description: latestUserMessage,
+      ...analysis,
+    }),
+  };
+};
+
 const retrieveDocs: GraphNode<typeof AgentState> = (
   state,
 ): AgentStateUpdate => {
@@ -344,10 +420,14 @@ ${state.detectedPatterns.join(", ")}
 Pattern knowledge:
 ${state.patternDocs.join("\n")}
 
+Latest extracted event:
+${state.latestEvent ? JSON.stringify(state.latestEvent, null, 2) : "None"}
+
 Rules:
 - Extract only what is supported by the transcript.
 - Use previous persisted market state only as prior context.
-- The new user observation is the source of truth for the latest event.
+- Treat Latest extracted event as the source of truth for marketState.latestEvent when it is present.
+- If Latest extracted event is None, only set latestEvent if the current transcript clearly contains a meaningful new observation.
 - Preserve still-valid prior structures only when the new observation does not invalidate them.
 - If the new observation contradicts the previous state, update the state and explain the change in latestEvent.effect.
 - Do not carry forward weak prior assumptions as confirmed facts.
@@ -362,9 +442,15 @@ Rules:
 `,
     config,
   );
+  const marketState = normalizeMarketState(marketStateResponse);
 
   return {
-    marketState: normalizeMarketState(marketStateResponse),
+    marketState: state.latestEvent
+      ? marketStateSchema.parse({
+          ...marketState,
+          latestEvent: state.latestEvent,
+        })
+      : marketState,
   };
 };
 
@@ -418,11 +504,13 @@ const generateReport: GraphNode<typeof AgentState> = async (
 
 const graph = new StateGraph(AgentState)
   .addNode("detect_patterns", detectPatterns)
+  .addNode("extract_latest_event", extractLatestEvent)
   .addNode("retrieve_docs", retrieveDocs)
   .addNode("build_market_state", buildMarketState)
   .addNode("generate_report", generateReport)
   .addEdge(START, "detect_patterns")
-  .addEdge("detect_patterns", "retrieve_docs")
+  .addEdge("detect_patterns", "extract_latest_event")
+  .addEdge("extract_latest_event", "retrieve_docs")
   .addEdge("retrieve_docs", "build_market_state")
   .addEdge("build_market_state", "generate_report")
   .addEdge("generate_report", END)
