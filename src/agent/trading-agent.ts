@@ -7,9 +7,8 @@ import {
   StateGraph,
   StateSchema,
   type GraphNode,
-  type LangGraphRunnableConfig,
 } from "@langchain/langgraph";
-import { getCurrentRunTree, traceable } from "langsmith/traceable";
+import { traceable } from "langsmith/traceable";
 import { z } from "zod";
 import { responseStyleSchema, tradingAgentResultSchema } from "./schemas";
 import {
@@ -18,15 +17,34 @@ import {
 } from "./prompts";
 import type {
   MarketState,
+  TradingAgentStep,
+  TradingAgentStepEvent,
   TradingAgentInput,
   TradingAgentResult,
 } from "./types";
 
-export type { TradingAgentInput, TradingAgentResult } from "./types";
+export type {
+  TradingAgentInput,
+  TradingAgentResult,
+  TradingAgentStep,
+  TradingAgentStepEvent,
+} from "./types";
 
 const DEFAULT_LANGSMITH_PROJECT = "playbook-chat";
 const TRADING_MODEL_NAME = "gpt-5.4-mini";
 const BASE_TRACE_TAGS = ["trading-agent", "langgraph", "analysis"] as const;
+const TRADING_AGENT_STEPS = [
+  "detect_patterns",
+  "retrieve_docs",
+  "build_market_state",
+  "generate_report",
+] as const satisfies readonly TradingAgentStep[];
+const TRADING_AGENT_STEP_LABELS = {
+  detect_patterns: "Detecting patterns",
+  retrieve_docs: "Retrieving pattern context",
+  build_market_state: "Building market state",
+  generate_report: "Generating report",
+} as const satisfies Record<TradingAgentStep, string>;
 
 const activeMarketCicleSchema = z.enum([
   "breakout",
@@ -413,23 +431,47 @@ const graph = new StateGraph(AgentState)
   .addEdge("generate_report", END)
   .compile();
 
-async function runTradingAgentImpl(
-  input: TradingAgentInput,
-): Promise<TradingAgentResult> {
+function validatePrompt(input: TradingAgentInput) {
   const prompt = input.prompt.trim();
 
   if (!prompt) {
-    const error = new Error("Trading agent prompt is required.");
-    throw error;
+    throw new Error("Trading agent prompt is required.");
   }
 
-  try {
-    const transcript = buildConversationTranscript(input.history, prompt);
+  return prompt;
+}
 
-    const graphResult = await graph.invoke({
-      userInput: transcript,
-      responseStyle: input.responseStyle,
-    });
+function buildGraphInput(input: TradingAgentInput) {
+  const prompt = validatePrompt(input);
+  const transcript = buildConversationTranscript(input.history, prompt);
+
+  return {
+    userInput: transcript,
+    responseStyle: input.responseStyle,
+  };
+}
+
+function createStepEvent(
+  step: TradingAgentStep,
+  status: TradingAgentStepEvent["status"],
+): TradingAgentStepEvent {
+  return {
+    type: "step",
+    step,
+    status,
+    label: TRADING_AGENT_STEP_LABELS[step],
+  };
+}
+
+function isTradingAgentStep(value: string): value is TradingAgentStep {
+  return TRADING_AGENT_STEPS.includes(value as TradingAgentStep);
+}
+
+async function runTradingAgentImpl(
+  input: TradingAgentInput,
+): Promise<TradingAgentResult> {
+  try {
+    const graphResult = await graph.invoke(buildGraphInput(input));
     const report = graphResult.report?.trim();
 
     if (!report) {
@@ -458,3 +500,63 @@ export const runTradingAgent: RunTradingAgent = traceable(runTradingAgentImpl, {
   project_name: getLangSmithProjectName(),
   tags: [...BASE_TRACE_TAGS],
 }) as RunTradingAgent;
+
+export async function* streamTradingAgent(
+  input: TradingAgentInput,
+  signal?: AbortSignal,
+): AsyncGenerator<TradingAgentStepEvent, TradingAgentResult> {
+  try {
+    const graphInput = buildGraphInput(input);
+    const latestState: Partial<AgentStateType> = {};
+    let nextStepIndex = 0;
+
+    yield createStepEvent(TRADING_AGENT_STEPS[nextStepIndex], "running");
+
+    const stream = await graph.stream(graphInput, {
+      streamMode: "updates",
+      ...(signal ? { signal } : {}),
+    });
+
+    for await (const chunk of stream) {
+      const update = chunk as Partial<Record<TradingAgentStep, AgentStateUpdate>>;
+
+      for (const [nodeName, nodeUpdate] of Object.entries(update)) {
+        if (!isTradingAgentStep(nodeName)) {
+          continue;
+        }
+
+        if (nodeUpdate && typeof nodeUpdate === "object") {
+          Object.assign(latestState, nodeUpdate);
+        }
+
+        yield createStepEvent(nodeName, "completed");
+
+        const completedStepIndex = TRADING_AGENT_STEPS.indexOf(nodeName);
+
+        if (completedStepIndex >= nextStepIndex) {
+          nextStepIndex = completedStepIndex + 1;
+        }
+
+        const nextStep = TRADING_AGENT_STEPS[nextStepIndex];
+
+        if (nextStep) {
+          yield createStepEvent(nextStep, "running");
+        }
+      }
+    }
+
+    const report = latestState.report?.trim();
+
+    if (!report) {
+      throw new Error("Trading agent returned an empty report.");
+    }
+
+    return tradingAgentResultSchema.parse({
+      state: "analysis_ready",
+      report,
+    });
+  } catch (error) {
+    console.error("Error streaming trading agent:", error);
+    throw error;
+  }
+}

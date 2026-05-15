@@ -3,11 +3,17 @@ import type { ChatMessage } from "~/db/schema";
 import type {
   agentStateSchema,
   responseStyleSchema,
+  tradingAgentStepEventSchema,
+  tradingAgentStepSchema,
   tradingAgentResultSchema,
 } from "./schemas";
 
 export type AgentState = z.infer<typeof agentStateSchema>;
 export type ResponseStyle = z.infer<typeof responseStyleSchema>;
+export type TradingAgentStep = z.infer<typeof tradingAgentStepSchema>;
+export type TradingAgentStepEvent = z.infer<
+  typeof tradingAgentStepEventSchema
+>;
 
 export type ActiveMarketCicle =
   | "breakout"

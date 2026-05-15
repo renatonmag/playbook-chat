@@ -1,4 +1,9 @@
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import {
+  createTRPCClient,
+  httpBatchLink,
+  httpBatchStreamLink,
+  splitLink,
+} from "@trpc/client";
 import { getRequestEvent, isServer } from "solid-js/web";
 import type { AppRouter } from "~/server/trpc/router";
 
@@ -20,10 +25,17 @@ function getTRPCBaseUrl() {
 function makeTRPCClient() {
   return createTRPCClient<AppRouter>({
     links: [
-      httpBatchLink({
-        url: getTRPCBaseUrl()
-      })
-    ]
+      splitLink({
+        condition: op => op.path === "chat.stream",
+        true: httpBatchStreamLink({
+          url: getTRPCBaseUrl(),
+          maxItems: 1,
+        }),
+        false: httpBatchLink({
+          url: getTRPCBaseUrl(),
+        }),
+      }),
+    ],
   });
 }
 

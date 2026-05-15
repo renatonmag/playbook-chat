@@ -1,116 +1,75 @@
 import { TRPCError } from "@trpc/server";
-import { desc, eq } from "drizzle-orm";
+import { desc } from "drizzle-orm";
 import { z } from "zod";
-import { runTradingAgent } from "~/agent";
+import { runTradingAgent, streamTradingAgent } from "~/agent";
 import {
   agentStateSchema,
-  chatMessageMetadataSchema,
   responseStyleSchema,
 } from "~/agent/schemas";
 import { db } from "~/db";
+import { chatThreadsTable, type ChatMessage } from "~/db/schema";
 import {
-  chatThreadsTable,
-  type ChatMessage,
-  type ChatMessageMetadata,
-} from "~/db/schema";
+  chatMessagesSchema,
+  createMessage,
+  createThread,
+  deleteThread,
+  getLatestThread,
+  getThreadById,
+  updateThread,
+} from "~/server/chat-store";
 import { publicProcedure, router } from "./init";
 
-const chatMessageSchema = z.object({
-  id: z.string().min(1),
-  role: z.enum(["user", "assistant"]),
-  content: z.string().min(1),
-  metadata: chatMessageMetadataSchema.optional(),
+const chatInputSchema = z.object({
+  threadId: z.string().uuid().optional(),
+  message: z.string().trim().min(1),
+  responseStyle: responseStyleSchema.default("report"),
 });
 
-const chatMessagesSchema = z.array(chatMessageSchema);
+const chatResponseSchema = z.object({
+  threadId: z.string().uuid(),
+  messages: chatMessagesSchema,
+  message: z.string().min(1),
+  state: agentStateSchema,
+});
 
-function createMessage(
-  role: ChatMessage["role"],
-  content: string,
-  metadata?: ChatMessageMetadata,
-): ChatMessage {
-  return {
-    id: crypto.randomUUID(),
-    role,
-    content,
-    ...(metadata ? { metadata } : {}),
-  };
+async function resolveChatThread(threadId: string | undefined) {
+  const existingThread = threadId
+    ? await getThreadById(threadId)
+    : await getLatestThread();
+
+  if (threadId && !existingThread) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Chat thread not found.",
+    });
+  }
+
+  return existingThread ?? (await createThread([]));
 }
 
-async function getLatestThread() {
-  const [thread] = await db
-    .select()
-    .from(chatThreadsTable)
-    .orderBy(desc(chatThreadsTable.updatedAt))
-    .limit(1);
-
-  return thread ?? null;
-}
-
-async function getThreadById(id: string) {
-  const [thread] = await db
-    .select()
-    .from(chatThreadsTable)
-    .where(eq(chatThreadsTable.id, id))
-    .limit(1);
-
-  return thread ?? null;
-}
-
-async function createThread(messages: ChatMessage[]) {
-  const id = crypto.randomUUID();
-
-  await db.insert(chatThreadsTable).values({
-    id,
-    messages,
+async function sendChatMessage(input: z.infer<typeof chatInputSchema>) {
+  const thread = await resolveChatThread(input.threadId);
+  const userMessage = createMessage("user", input.message, {
+    responseStyle: input.responseStyle,
   });
+  const result = await runTradingAgent({
+    prompt: input.message,
+    history: thread.messages,
+    responseStyle: input.responseStyle,
+  });
+  const assistantMessage = createMessage("assistant", result.report, {
+    agentState: result.state,
+    responseStyle: input.responseStyle,
+  });
+  const messages = [...thread.messages, userMessage, assistantMessage];
+  const updatedThread = await updateThread(thread.id, messages);
 
-  const thread = await getThreadById(id);
-
-  if (!thread) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Could not create chat thread.",
-    });
-  }
-
-  return thread;
-}
-
-async function updateThread(id: string, messages: ChatMessage[]) {
-  await db
-    .update(chatThreadsTable)
-    .set({
-      messages,
-      updatedAt: new Date(),
-    })
-    .where(eq(chatThreadsTable.id, id));
-
-  const thread = await getThreadById(id);
-
-  if (!thread) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "Chat thread not found.",
-    });
-  }
-
-  return thread;
-}
-
-async function deleteThread(id: string) {
-  const thread = await getThreadById(id);
-
-  if (!thread) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "Chat thread not found.",
-    });
-  }
-
-  await db.delete(chatThreadsTable).where(eq(chatThreadsTable.id, id));
-
-  return { id };
+  return {
+    threadId: updatedThread.id,
+    messages: updatedThread.messages,
+    message: result.report,
+    state: result.state,
+  };
 }
 
 export const appRouter = router({
@@ -154,57 +113,63 @@ export const appRouter = router({
       )
       .mutation(({ input }) => deleteThread(input.id)),
   }),
-  chat: publicProcedure
-    .input(
-      z.object({
-        threadId: z.string().uuid().optional(),
-        message: z.string().trim().min(1),
-        responseStyle: responseStyleSchema.default("report"),
-      }),
-    )
-    .output(
-      z.object({
-        threadId: z.string().uuid(),
-        messages: chatMessagesSchema,
-        message: z.string().min(1),
-        state: agentStateSchema,
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const existingThread = input.threadId
-        ? await getThreadById(input.threadId)
-        : await getLatestThread();
-
-      if (input.threadId && !existingThread) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Chat thread not found.",
+  chat: router({
+    send: publicProcedure
+      .input(chatInputSchema)
+      .output(chatResponseSchema)
+      .mutation(({ input }) => sendChatMessage(input)),
+    stream: publicProcedure
+      .input(chatInputSchema)
+      .mutation(async function* ({ input, signal }) {
+        const thread = await resolveChatThread(input.threadId);
+        const userMessage = createMessage("user", input.message, {
+          responseStyle: input.responseStyle,
         });
-      }
+        const messagesWithUser: ChatMessage[] = [
+          ...thread.messages,
+          userMessage,
+        ];
+        const userThread = await updateThread(thread.id, messagesWithUser);
 
-      const thread = existingThread ?? (await createThread([]));
-      const userMessage = createMessage("user", input.message, {
-        responseStyle: input.responseStyle,
-      });
-      const result = await runTradingAgent({
-        prompt: input.message,
-        history: thread.messages,
-        responseStyle: input.responseStyle,
-      });
-      const assistantMessage = createMessage("assistant", result.report, {
-        agentState: result.state,
-        responseStyle: input.responseStyle,
-      });
-      const messages = [...thread.messages, userMessage, assistantMessage];
-      const updatedThread = await updateThread(thread.id, messages);
+        yield {
+          type: "thread" as const,
+          threadId: userThread.id,
+          userMessage,
+        };
 
-      return {
-        threadId: updatedThread.id,
-        messages: updatedThread.messages,
-        message: result.report,
-        state: result.state,
-      };
-    }),
+        const agentStream = streamTradingAgent(
+          {
+            prompt: input.message,
+            history: thread.messages,
+            responseStyle: input.responseStyle,
+          },
+          signal,
+        );
+
+        let next = await agentStream.next();
+
+        while (!next.done) {
+          yield next.value;
+          next = await agentStream.next();
+        }
+
+        const result = next.value;
+        const assistantMessage = createMessage("assistant", result.report, {
+          agentState: result.state,
+          responseStyle: input.responseStyle,
+        });
+        const finalMessages = [...messagesWithUser, assistantMessage];
+        const updatedThread = await updateThread(userThread.id, finalMessages);
+
+        yield {
+          type: "complete" as const,
+          threadId: updatedThread.id,
+          messages: updatedThread.messages,
+          message: result.report,
+          state: result.state,
+        };
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

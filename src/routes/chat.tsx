@@ -1,4 +1,5 @@
 import { For, Show, createSignal, onMount } from "solid-js";
+import type { TradingAgentStep } from "~/agent";
 import { renderMarkdown } from "~/lib/render-markdown";
 import { getTRPCClient } from "~/lib/trpc/client";
 
@@ -21,6 +22,12 @@ type ChatThread = {
   messages: ChatMessage[];
   createdAt: Date | string;
   updatedAt: Date | string;
+};
+
+type StreamStep = {
+  step: TradingAgentStep;
+  label: string;
+  status: "running" | "completed";
 };
 
 function createMessageId() {
@@ -52,6 +59,7 @@ export default function Chat() {
   const [isCreatingThread, setIsCreatingThread] = createSignal(false);
   const [deletingThreadId, setDeletingThreadId] = createSignal<string>();
   const [isSending, setIsSending] = createSignal(false);
+  const [streamSteps, setStreamSteps] = createSignal<StreamStep[]>([]);
   const [error, setError] = createSignal("");
   const [hasMounted, setHasMounted] = createSignal(false);
 
@@ -212,6 +220,20 @@ export default function Chat() {
     }
   }
 
+  function upsertStreamStep(step: StreamStep) {
+    setStreamSteps(current => {
+      const existingIndex = current.findIndex(item => item.step === step.step);
+
+      if (existingIndex === -1) {
+        return [...current, step];
+      }
+
+      return current.map((item, index) =>
+        index === existingIndex ? step : item,
+      );
+    });
+  }
+
   async function sendMessage() {
     const message = draft().trim();
 
@@ -233,22 +255,36 @@ export default function Chat() {
     setError("");
     setDraft("");
     setIsSending(true);
+    setStreamSteps([]);
     setMessages(current => [...current, optimisticUserMessage]);
 
     try {
-      const response = await getTRPCClient().chat.mutate({
+      const stream = await getTRPCClient().chat.stream.mutate({
         threadId: threadId(),
         message,
         responseStyle: selectedResponseStyle,
       });
 
-      setThreadId(response.threadId);
-      setMessages(response.messages);
-      await refreshThreadList(response.threadId, response.messages);
+      for await (const event of stream) {
+        switch (event.type) {
+          case "thread":
+            setThreadId(event.threadId);
+            break;
+          case "step":
+            upsertStreamStep(event);
+            break;
+          case "complete":
+            setThreadId(event.threadId);
+            setMessages(event.messages);
+            await refreshThreadList(event.threadId, event.messages);
+            break;
+        }
+      }
     } catch {
       setMessages(previousMessages);
       setError("Could not send message. Try again.");
     } finally {
+      setStreamSteps([]);
       setIsSending(false);
     }
   }
@@ -406,9 +442,29 @@ export default function Chat() {
 
           <Show when={isSending()}>
             <div class="flex justify-start">
-              <p class="rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-500">
-                Thinking...
-              </p>
+              <div class="rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-600">
+                <Show
+                  when={streamSteps().length > 0}
+                  fallback={<p>Starting analysis...</p>}
+                >
+                  <div class="space-y-1">
+                    <For each={streamSteps()}>
+                      {step => (
+                        <p
+                          class={
+                            step.status === "completed"
+                              ? "text-slate-400"
+                              : "font-medium text-slate-700"
+                          }
+                        >
+                          {step.label}
+                          <Show when={step.status === "running"}>...</Show>
+                        </p>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </div>
             </div>
             </Show>
         </div>

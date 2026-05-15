@@ -17,3 +17,17 @@ export const tradingAgentResultSchema = z.object({
   state: agentStateSchema,
   report: z.string().trim().min(1),
 });
+
+export const tradingAgentStepSchema = z.enum([
+  "detect_patterns",
+  "retrieve_docs",
+  "build_market_state",
+  "generate_report",
+]);
+
+export const tradingAgentStepEventSchema = z.object({
+  type: z.literal("step"),
+  step: tradingAgentStepSchema,
+  status: z.enum(["running", "completed"]),
+  label: z.string().trim().min(1),
+});
