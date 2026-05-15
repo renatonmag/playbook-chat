@@ -91,16 +91,15 @@ const marketStateResponseSchema = z.object({
   openQuestions: z.array(z.string().trim().min(1)),
 });
 
-const latestEventAnalysisSchema = z
-  .object({
-    tags: z.array(z.string().trim().min(1)),
-    direction: directionalBiasSchema,
-    changesPreviousRead: z.boolean(),
-    effect: z.string().trim().min(1),
-    invalidates: z.array(z.string().trim().min(1)),
-    supports: z.array(z.string().trim().min(1)),
-  })
-  .nullable();
+const latestEventAnalysisSchema = z.object({
+  hasMarketEvent: z.boolean(),
+  tags: z.array(z.string().trim().min(1)),
+  direction: directionalBiasSchema,
+  changesPreviousRead: z.boolean(),
+  effect: z.string().trim(),
+  invalidates: z.array(z.string().trim().min(1)),
+  supports: z.array(z.string().trim().min(1)),
+});
 
 const conversationTranscriptMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -221,11 +220,7 @@ function extractReportFromNodeOutput(output: unknown) {
 }
 
 function extractMarketStateFromNodeOutput(output: unknown) {
-  if (
-    output &&
-    typeof output === "object" &&
-    "marketState" in output
-  ) {
+  if (output && typeof output === "object" && "marketState" in output) {
     return marketStateSchema.parse(output.marketState);
   }
 
@@ -343,7 +338,7 @@ const extractLatestEvent: GraphNode<typeof AgentState> = async (
     `
 You extract the latest market event for a price action trading workflow.
 
-Return structured analysis for the latest user message, or return null when the message does not contain a new market observation.
+Return an object. Set hasMarketEvent to false when the latest user message does not contain a new market observation.
 
 Latest user message:
 ${latestUserMessage}
@@ -355,11 +350,19 @@ Detected patterns:
 ${state.detectedPatterns.join(", ")}
 
 Rules:
+- Always return an object.
+- Never return null.
 - Analyze only the latest user message as the possible new event.
 - Use previous persisted market state only to decide whether the new event changes, confirms, weakens, or invalidates the prior read.
 - Do not summarize, translate, rewrite, correct, or paraphrase the latest user message.
 - Do not include a description field. The application will assign description exactly from the latest user message.
-- Return null if the latest user message is a conceptual question, UI instruction, or other text without a new chart or market observation.
+- If the latest user message is not a market observation:
+  - set hasMarketEvent to false
+  - set tags, invalidates, and supports to []
+  - set direction to neutral
+  - set changesPreviousRead to false
+  - set effect to ""
+- If hasMarketEvent is true, effect must be a concise non-empty technical impact statement.
 - tags must be short technical labels supported by the latest user message.
 - direction is the immediate pressure implied by the latest user message: bullish, bearish, or neutral.
 - changesPreviousRead is true only when the latest user message materially confirms, weakens, or invalidates the previous market state.
@@ -371,14 +374,19 @@ Rules:
     config,
   );
 
-  if (!analysis) {
+  if (!analysis.hasMarketEvent) {
     return {};
   }
 
   return {
     latestEvent: latestEventSchema.parse({
       description: latestUserMessage,
-      ...analysis,
+      tags: analysis.tags,
+      direction: analysis.direction,
+      changesPreviousRead: analysis.changesPreviousRead,
+      effect: analysis.effect,
+      invalidates: analysis.invalidates,
+      supports: analysis.supports,
     }),
   };
 };
@@ -401,33 +409,32 @@ const buildMarketState: GraphNode<typeof AgentState> = async (
   state,
   config,
 ): Promise<AgentStateUpdate> => {
-  const transcript = conversationTranscriptToText(state.userInput);
+  // const transcript = conversationTranscriptToText(state.userInput);
+  // Conversation transcript:
+  // ${transcript}
   const marketStateResponse = await getMarketStateModel().invoke(
     `
 You are a market structure extraction assistant for an Al Brooks price action trading workflow.
 
 Build a conservative structured market state from the transcript and detected patterns.
 
-Conversation transcript:
-${transcript}
-
-Previous persisted market state:
+<previous_market_state>
 ${state.previousMarketState ? JSON.stringify(state.previousMarketState, null, 2) : "None"}
+</previous_market_state>
 
-Detected patterns:
+<detected_patterns>
 ${state.detectedPatterns.join(", ")}
+</detected_patterns>
 
-Pattern knowledge:
-${state.patternDocs.join("\n")}
-
-Latest extracted event:
+<latest_extracted_event>
 ${state.latestEvent ? JSON.stringify(state.latestEvent, null, 2) : "None"}
+<latest_extracted_event>
 
 Rules:
 - Extract only what is supported by the transcript.
-- Use previous persisted market state only as prior context.
-- Treat Latest extracted event as the source of truth for marketState.latestEvent when it is present.
-- If Latest extracted event is None, only set latestEvent if the current transcript clearly contains a meaningful new observation.
+- Use previous_market_state state only as prior context.
+- Treat latest_extracted_event as the source of truth for marketState.latestEvent when it is present.
+- If latest_extracted_event is None, only set latestEvent if the current transcript clearly contains a meaningful new observation.
 - Preserve still-valid prior structures only when the new observation does not invalidate them.
 - If the new observation contradicts the previous state, update the state and explain the change in latestEvent.effect.
 - Do not carry forward weak prior assumptions as confirmed facts.
@@ -462,18 +469,23 @@ function buildReportPrompt(state: AgentStateType) {
   }
 
   const transcript = conversationTranscriptToText(state.userInput);
-  const promptInput = {
+
+  if (state.responseStyle === "freeform") {
+    return freeformTradingSystemPrompt({
+      userInput: transcript,
+      detectedPatterns: state.detectedPatterns,
+      patternDocs: state.patternDocs,
+      marketState: JSON.stringify(marketState, null, 2),
+    });
+  }
+
+  return technicalAnalysisSystemPrompt({
     userInput: transcript,
     detectedPatterns: state.detectedPatterns,
-    patternDocs: state.patternDocs,
-    marketState: JSON.stringify(marketState, null, 2),
-  };
-  const prompt =
-    state.responseStyle === "freeform"
-      ? freeformTradingSystemPrompt(promptInput)
-      : technicalAnalysisSystemPrompt(promptInput);
-
-  return prompt;
+    previousMarketState: state.previousMarketState ?? null,
+    marketState,
+    latestEvent: state.latestEvent ?? marketState.latestEvent ?? null,
+  });
 }
 
 const generateReport: GraphNode<typeof AgentState> = async (
@@ -481,10 +493,7 @@ const generateReport: GraphNode<typeof AgentState> = async (
   config,
 ): Promise<AgentStateUpdate> => {
   const prompt = buildReportPrompt(state);
-  const chunks = await getTradingModel().stream(
-    prompt,
-    config,
-  );
+  const chunks = await getTradingModel().stream(prompt, config);
   let report = "";
 
   for await (const chunk of chunks) {

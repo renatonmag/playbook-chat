@@ -1,8 +1,11 @@
+import type { MarketState } from "./types";
+
 export type TechnicalAnalysisPromptInput = {
   userInput: string;
   detectedPatterns: string[];
-  patternDocs: string[];
-  marketState: string;
+  previousMarketState: MarketState | null;
+  marketState: MarketState;
+  latestEvent: MarketState["latestEvent"] | null;
 };
 
 export type FreeformTradingPromptInput = {
@@ -102,8 +105,9 @@ export type FreeformTradingPromptInput = {
 export function technicalAnalysisSystemPrompt({
   userInput,
   detectedPatterns,
-  patternDocs,
+  previousMarketState,
   marketState,
+  latestEvent,
 }: TechnicalAnalysisPromptInput) {
   return `You are a trading-pattern reporting assistant using Al Brooks price action methodology. 
   Do not mention the name of any specific author or methodology.
@@ -113,6 +117,14 @@ export function technicalAnalysisSystemPrompt({
   Write in the same language as the user's prompt.
   
   INPUT DATA:
+
+  <previous_market_state>
+  ${JSON.stringify(previousMarketState, null, 2)}
+  </previous_market_state>
+
+  <latest_extracted_event>
+  ${JSON.stringify(latestEvent, null, 2)}
+  <latest_extracted_event>
   
   <user_description>
   ${userInput}
@@ -121,10 +133,6 @@ export function technicalAnalysisSystemPrompt({
   <detected_patterns>
   ${detectedPatterns.join(", ")}
   </detected_patterns>
-  
-  <pattern_knowledge>
-  ${patternDocs.join("\n")}
-  </pattern_knowledge>
   
   <structured_market_state>
   ${JSON.stringify(marketState, null, 2)}
@@ -147,23 +155,28 @@ export function technicalAnalysisSystemPrompt({
   - ...
   - ...
   
+  \`\`\`text
+  [Pattern 0]:
+  → [Pattern 1]
+  → [Pattern 2]
+  → [Pattern 3]
+  → [Pattern 4]
   \`\`\`
-  Pattern 0:
-  → Pattern 1
-  → Pattern 2
-  → Pattern 3
-  → Pattern 4
-  \`\`\`
   
-  **What sellers need (Selling case):**
+  **O que os vendedores precisam (Vendas):**
   
   - ...
   - ...
   - ...
   
-  **What buyers need (Buying case):**
+  **O que os compradores precisam (Compras):**
   
   - ...
+  - ...
+  - ...
+
+  **Questões em aberto:**
+
   - ...
   - ...
   
@@ -185,28 +198,25 @@ export function technicalAnalysisSystemPrompt({
   - Keep phrases short and direct.
   - Do not invent price levels, indicators, timeframes, volume details, or signals not provided.
   - Use structured_market_state as the primary source of context.
-  - Use structured_market_state.openQuestions only as uncertainty inside the reading, not as a separate questionnaire.
   - Do not return JSON.
   - Do not use markdown tables.
   - Do not add financial disclaimers.
-  - Do not add educational filler.
-  - Do not summarize at the end.
-  - Stop immediately after the final bullet under **What buyers need (Buying case):**.
-  
-  FORBIDDEN OUTPUT:
-  
-  The response must not contain these headings or labels:
-  - Report Rules
-  - General Rules
-  - What has changed since the previous reading
-  - New dominant reading
-  - Next confirmation signals
-  - Remaining questions
-  - Conclusion
-  - Summary
-  - Disclaimer
+  - Stop immediately after the final bullet under **Questões em aberto:**.
   `;
 }
+
+// FORBIDDEN OUTPUT:
+
+// The response must not contain these headings or labels:
+// - Report Rules
+// - General Rules
+// - What has changed since the previous reading
+// - New dominant reading
+// - Next confirmation signals
+// - Remaining questions
+// - Conclusion
+// - Summary
+// - Disclaimer
 
 export function freeformTradingSystemPrompt({
   userInput,
