@@ -14,6 +14,12 @@ export type TradingAgentStep = z.infer<typeof tradingAgentStepSchema>;
 export type TradingAgentStepEvent = z.infer<
   typeof tradingAgentStepEventSchema
 >;
+export type TradingAgentTextEvent =
+  | TradingAgentStepEvent
+  | {
+      type: "text_delta";
+      delta: string;
+    };
 
 export type ActiveMarketCicle =
   | "breakout"

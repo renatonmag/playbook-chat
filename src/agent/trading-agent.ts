@@ -19,6 +19,7 @@ import type {
   MarketState,
   TradingAgentStep,
   TradingAgentStepEvent,
+  TradingAgentTextEvent,
   TradingAgentInput,
   TradingAgentResult,
 } from "./types";
@@ -28,6 +29,7 @@ export type {
   TradingAgentResult,
   TradingAgentStep,
   TradingAgentStepEvent,
+  TradingAgentTextEvent,
 } from "./types";
 
 const DEFAULT_LANGSMITH_PROJECT = "playbook-chat";
@@ -384,9 +386,7 @@ Rules:
   };
 };
 
-const generateReport: GraphNode<typeof AgentState> = async (
-  state,
-): Promise<AgentStateUpdate> => {
+function buildReportPrompt(state: AgentStateType) {
   const marketState = state.marketState;
 
   if (!marketState) {
@@ -404,6 +404,13 @@ const generateReport: GraphNode<typeof AgentState> = async (
       ? freeformTradingSystemPrompt(promptInput)
       : technicalAnalysisSystemPrompt(promptInput);
 
+  return prompt;
+}
+
+const generateReport: GraphNode<typeof AgentState> = async (
+  state,
+): Promise<AgentStateUpdate> => {
+  const prompt = buildReportPrompt(state);
   const result = await getTradingModel().invoke(
     prompt,
   );
@@ -429,6 +436,16 @@ const graph = new StateGraph(AgentState)
   .addEdge("retrieve_docs", "build_market_state")
   .addEdge("build_market_state", "generate_report")
   .addEdge("generate_report", END)
+  .compile();
+
+const preparationGraph = new StateGraph(AgentState)
+  .addNode("detect_patterns", detectPatterns)
+  .addNode("retrieve_docs", retrieveDocs)
+  .addNode("build_market_state", buildMarketState)
+  .addEdge(START, "detect_patterns")
+  .addEdge("detect_patterns", "retrieve_docs")
+  .addEdge("retrieve_docs", "build_market_state")
+  .addEdge("build_market_state", END)
   .compile();
 
 function validatePrompt(input: TradingAgentInput) {
@@ -504,15 +521,19 @@ export const runTradingAgent: RunTradingAgent = traceable(runTradingAgentImpl, {
 export async function* streamTradingAgent(
   input: TradingAgentInput,
   signal?: AbortSignal,
-): AsyncGenerator<TradingAgentStepEvent, TradingAgentResult> {
+): AsyncGenerator<TradingAgentTextEvent, TradingAgentResult> {
   try {
     const graphInput = buildGraphInput(input);
-    const latestState: Partial<AgentStateType> = {};
+    const latestState: AgentStateType = {
+      ...graphInput,
+      detectedPatterns: [],
+      patternDocs: [],
+    };
     let nextStepIndex = 0;
 
     yield createStepEvent(TRADING_AGENT_STEPS[nextStepIndex], "running");
 
-    const stream = await graph.stream(graphInput, {
+    const stream = await preparationGraph.stream(graphInput, {
       streamMode: "updates",
       ...(signal ? { signal } : {}),
     });
@@ -545,15 +566,40 @@ export async function* streamTradingAgent(
       }
     }
 
-    const report = latestState.report?.trim();
+    const prompt = buildReportPrompt(latestState);
+    let report = "";
 
-    if (!report) {
+    const chunks = await getTradingModel().stream(
+      prompt,
+      signal ? { signal } : undefined,
+    );
+
+    for await (const chunk of chunks) {
+      const delta = contentToText(chunk.content);
+
+      if (!delta) {
+        continue;
+      }
+
+      report += delta;
+
+      yield {
+        type: "text_delta",
+        delta,
+      };
+    }
+
+    yield createStepEvent("generate_report", "completed");
+
+    const trimmedReport = report.trim();
+
+    if (!trimmedReport) {
       throw new Error("Trading agent returned an empty report.");
     }
 
     return tradingAgentResultSchema.parse({
       state: "analysis_ready",
-      report,
+      report: trimmedReport,
     });
   } catch (error) {
     console.error("Error streaming trading agent:", error);

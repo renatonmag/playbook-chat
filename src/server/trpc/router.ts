@@ -130,6 +130,12 @@ export const appRouter = router({
           userMessage,
         ];
         const userThread = await updateThread(thread.id, messagesWithUser);
+        const assistantMessageId = crypto.randomUUID();
+        const assistantMetadata = {
+          agentState: "analysis_ready" as const,
+          responseStyle: input.responseStyle,
+        };
+        let assistantStarted = false;
 
         yield {
           type: "thread" as const,
@@ -149,17 +155,50 @@ export const appRouter = router({
         let next = await agentStream.next();
 
         while (!next.done) {
-          yield next.value;
+          if (next.value.type === "text_delta") {
+            if (!assistantStarted) {
+              assistantStarted = true;
+
+              yield {
+                type: "assistant_start" as const,
+                messageId: assistantMessageId,
+                metadata: assistantMetadata,
+              };
+            }
+
+            yield {
+              type: "assistant_delta" as const,
+              messageId: assistantMessageId,
+              delta: next.value.delta,
+            };
+          } else {
+            yield next.value;
+          }
+
           next = await agentStream.next();
         }
 
         const result = next.value;
-        const assistantMessage = createMessage("assistant", result.report, {
+        const finalAssistantMetadata = {
           agentState: result.state,
           responseStyle: input.responseStyle,
-        });
+        };
+        const assistantMessage: ChatMessage = {
+          id: assistantMessageId,
+          role: "assistant",
+          content: result.report,
+          metadata: finalAssistantMetadata,
+        };
         const finalMessages = [...messagesWithUser, assistantMessage];
         const updatedThread = await updateThread(userThread.id, finalMessages);
+
+        if (!assistantStarted) {
+          yield {
+            type: "assistant_start" as const,
+            messageId: assistantMessageId,
+            metadata: finalAssistantMetadata,
+          };
+        }
 
         yield {
           type: "complete" as const,

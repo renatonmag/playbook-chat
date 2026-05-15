@@ -60,6 +60,7 @@ export default function Chat() {
   const [deletingThreadId, setDeletingThreadId] = createSignal<string>();
   const [isSending, setIsSending] = createSignal(false);
   const [streamSteps, setStreamSteps] = createSignal<StreamStep[]>([]);
+  const [streamingAssistantId, setStreamingAssistantId] = createSignal<string>();
   const [error, setError] = createSignal("");
   const [hasMounted, setHasMounted] = createSignal(false);
 
@@ -234,6 +235,41 @@ export default function Chat() {
     });
   }
 
+  function startAssistantMessage(
+    messageId: string,
+    metadata: ChatMessageMetadata,
+  ) {
+    setStreamingAssistantId(messageId);
+    setMessages(current => {
+      if (current.some(message => message.id === messageId)) {
+        return current;
+      }
+
+      return [
+        ...current,
+        {
+          id: messageId,
+          role: "assistant",
+          content: "",
+          metadata,
+        },
+      ];
+    });
+  }
+
+  function appendAssistantDelta(messageId: string, delta: string) {
+    setMessages(current =>
+      current.map(message =>
+        message.id === messageId
+          ? {
+              ...message,
+              content: message.content + delta,
+            }
+          : message,
+      ),
+    );
+  }
+
   async function sendMessage() {
     const message = draft().trim();
 
@@ -256,6 +292,7 @@ export default function Chat() {
     setDraft("");
     setIsSending(true);
     setStreamSteps([]);
+    setStreamingAssistantId(undefined);
     setMessages(current => [...current, optimisticUserMessage]);
 
     try {
@@ -273,6 +310,12 @@ export default function Chat() {
           case "step":
             upsertStreamStep(event);
             break;
+          case "assistant_start":
+            startAssistantMessage(event.messageId, event.metadata);
+            break;
+          case "assistant_delta":
+            appendAssistantDelta(event.messageId, event.delta);
+            break;
           case "complete":
             setThreadId(event.threadId);
             setMessages(event.messages);
@@ -285,6 +328,7 @@ export default function Chat() {
       setError("Could not send message. Try again.");
     } finally {
       setStreamSteps([]);
+      setStreamingAssistantId(undefined);
       setIsSending(false);
     }
   }
@@ -440,7 +484,7 @@ export default function Chat() {
             </For>
           </Show>
 
-          <Show when={isSending()}>
+          <Show when={isSending() && !streamingAssistantId()}>
             <div class="flex justify-start">
               <div class="rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-600">
                 <Show
