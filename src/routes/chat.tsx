@@ -63,6 +63,7 @@ export default function Chat() {
   const [streamingAssistantId, setStreamingAssistantId] = createSignal<string>();
   const [error, setError] = createSignal("");
   const [hasMounted, setHasMounted] = createSignal(false);
+  let messagesContainerRef: HTMLDivElement | undefined;
 
   const canSubmit = () => draft().trim().length > 0 && !isSending() && !isLoadingThread();
 
@@ -70,6 +71,16 @@ export default function Chat() {
     setHasMounted(true);
     void loadThreads();
   });
+
+  function scrollMessagesToBottom() {
+    requestAnimationFrame(() => {
+      if (!messagesContainerRef) {
+        return;
+      }
+
+      messagesContainerRef.scrollTop = messagesContainerRef.scrollHeight;
+    });
+  }
 
   function getThreadTitle(thread: ChatThread) {
     const firstUserMessage = thread.messages.find(message => message.role === "user");
@@ -109,6 +120,8 @@ export default function Chat() {
         setThreadId(undefined);
         setMessages([]);
       }
+
+      scrollMessagesToBottom();
     } catch {
       setError("Could not load the saved conversation.");
     } finally {
@@ -126,6 +139,7 @@ export default function Chat() {
     setThreadId(thread.id);
     setMessages(thread.messages);
     setDraft("");
+    scrollMessagesToBottom();
   }
 
   async function createNewChat() {
@@ -145,6 +159,7 @@ export default function Chat() {
       setThreadId(thread.id);
       setMessages([]);
       setDraft("");
+      scrollMessagesToBottom();
     } catch {
       setError("Could not create a new chat.");
     } finally {
@@ -186,6 +201,7 @@ export default function Chat() {
         }
 
         setDraft("");
+        scrollMessagesToBottom();
       }
     } catch {
       setError("Could not delete the chat.");
@@ -233,6 +249,7 @@ export default function Chat() {
         index === existingIndex ? step : item,
       );
     });
+    scrollMessagesToBottom();
   }
 
   function startAssistantMessage(
@@ -255,6 +272,7 @@ export default function Chat() {
         },
       ];
     });
+    scrollMessagesToBottom();
   }
 
   function appendAssistantDelta(messageId: string, delta: string) {
@@ -268,6 +286,7 @@ export default function Chat() {
           : message,
       ),
     );
+    scrollMessagesToBottom();
   }
 
   async function sendMessage() {
@@ -294,6 +313,7 @@ export default function Chat() {
     setStreamSteps([]);
     setStreamingAssistantId(undefined);
     setMessages(current => [...current, optimisticUserMessage]);
+    scrollMessagesToBottom();
 
     try {
       const stream = await getTRPCClient().chat.stream.mutate({
@@ -319,6 +339,7 @@ export default function Chat() {
           case "complete":
             setThreadId(event.threadId);
             setMessages(event.messages);
+            scrollMessagesToBottom();
             await refreshThreadList(event.threadId, event.messages);
             break;
         }
@@ -334,9 +355,9 @@ export default function Chat() {
   }
 
   return (
-    <main class="min-h-[calc(100vh-48px)] bg-slate-100 text-slate-950">
-      <div class="mx-auto flex min-h-[calc(100vh-48px)] max-w-6xl flex-col gap-4 px-4 py-6 md:flex-row">
-        <aside class="flex h-72 shrink-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm md:h-[calc(100vh-96px)] md:w-72">
+    <main class="h-[calc(100vh-48px)] overflow-hidden bg-slate-100 text-slate-950">
+      <div class="mx-auto flex h-full min-h-0 max-w-6xl flex-col gap-4 px-4 py-6 md:flex-row">
+        <aside class="flex h-72 min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm md:h-full md:w-72">
           <div class="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
             <h1 class="text-sm font-semibold text-slate-900">Chats</h1>
             <button
@@ -349,7 +370,7 @@ export default function Chat() {
             </button>
           </div>
 
-          <div class="flex-1 overflow-y-auto p-2">
+          <div class="min-h-0 flex-1 overflow-y-auto p-2">
             <Show
               when={!isLoadingThreads() && threads().length > 0}
               fallback={
@@ -436,8 +457,13 @@ export default function Chat() {
           </div>
         </aside>
 
-        <section class="flex min-h-[calc(100vh-96px)] flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div class="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
+        <section class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div
+          ref={element => {
+            messagesContainerRef = element;
+          }}
+          class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-6"
+        >
           <Show
             when={!isLoadingThread() && messages().length > 0}
             fallback={
@@ -513,7 +539,7 @@ export default function Chat() {
             </Show>
         </div>
 
-        <div class="border-t border-slate-200 bg-white p-3 sm:p-4">
+        <div class="shrink-0 border-t border-slate-200 bg-white p-3 sm:p-4">
           <div class="flex flex-col gap-3 sm:flex-row">
             <label class="flex flex-col gap-1 text-xs font-medium text-slate-600 sm:w-32">
               Style
