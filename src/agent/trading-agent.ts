@@ -552,7 +552,7 @@ function buildReportPrompt(state: AgentStateType) {
     previousMarketState: state.previousMarketState ?? null,
     marketState,
     latestEvent: state.latestEvent ?? marketState.latestEvent ?? null,
-    patternAnswers: state.patternAnswers,
+    patternAnswers: [],
   });
 }
 
@@ -584,14 +584,15 @@ const graph = new StateGraph(AgentState)
   .addNode("extract_latest_event", extractLatestEvent)
   .addNode("retrieve_docs", retrieveDocs)
   .addNode("build_market_state", buildMarketState)
-  .addNode("answer_pattern_questions", answerPatternQuestions)
+  // .addNode("answer_pattern_questions", answerPatternQuestions)
   .addNode("generate_report", generateReport)
   .addEdge(START, "detect_patterns")
   .addEdge("detect_patterns", "extract_latest_event")
   .addEdge("extract_latest_event", "retrieve_docs")
   .addEdge("retrieve_docs", "build_market_state")
-  .addEdge("build_market_state", "answer_pattern_questions")
-  .addEdge("answer_pattern_questions", "generate_report")
+  // .addEdge("build_market_state", "answer_pattern_questions")
+  // .addEdge("answer_pattern_questions", "generate_report")
+  .addEdge("build_market_state", "generate_report")
   .addEdge("generate_report", END)
   .compile();
 

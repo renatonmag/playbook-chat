@@ -147,20 +147,17 @@ export function technicalAnalysisSystemPrompt({
   **O que os vendedores precisam (Vendas):**
   **O que os compradores precisam (Compras):**
   **Movimentos mais prováveis:**
-  - x% pattern 1
-  - x% pattern 2
-  - x% pattern 3
+  - pattern 1
+  - pattern 2
+  - pattern 3
   - ...\
 
-  # Possiveis evoluções
-  
   CONTENT REQUIREMENTS:
   
   Integrate these ideas inside the allowed sections only:
   - What buyers need to do
   - What sellers need to do
   - Next confirmation signals
-  - Possible pattern evolutions, what most probable patterns could surface
   
   Do not create headings for the items above.
   

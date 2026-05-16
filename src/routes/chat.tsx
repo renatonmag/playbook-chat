@@ -1,5 +1,10 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 import type { TradingAgentStep } from "~/agent";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "~/components/ui/collapsible";
 import { renderMarkdown } from "~/lib/render-markdown";
 import { getTRPCClient } from "~/lib/trpc/client";
 
@@ -48,6 +53,17 @@ function shouldRenderAssistantMarkdown(message: ChatMessage) {
   );
 }
 
+function isReportMessage(message: ChatMessage) {
+  return (
+    message.role === "assistant" &&
+    message.metadata?.responseStyle === "report"
+  );
+}
+
+function getReportPreview(content: string) {
+  return content.replace(/\s+/g, " ").trim().slice(0, 96);
+}
+
 export default function Chat() {
   const [threads, setThreads] = createSignal<ChatThread[]>([]);
   const [threadId, setThreadId] = createSignal<string>();
@@ -66,6 +82,7 @@ export default function Chat() {
   let messagesContainerRef: HTMLDivElement | undefined;
 
   const canSubmit = () => draft().trim().length > 0 && !isSending() && !isLoadingThread();
+  const reportMessages = () => messages().filter(isReportMessage);
 
   onMount(() => {
     setHasMounted(true);
@@ -356,8 +373,8 @@ export default function Chat() {
 
   return (
     <main class="h-[calc(100vh-48px)] overflow-hidden bg-slate-100 text-slate-950">
-      <div class="mx-auto flex h-full min-h-0 max-w-6xl flex-col gap-4 px-4 py-6 md:flex-row">
-        <aside class="flex h-72 min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm md:h-full md:w-72">
+      <div class="mx-auto flex h-full min-h-0 max-w-[92rem] flex-col gap-4 px-4 py-6 lg:flex-row">
+        <aside class="flex h-72 min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm lg:h-full lg:w-72">
           <div class="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
             <h1 class="text-sm font-semibold text-slate-900">Chats</h1>
             <button
@@ -457,7 +474,7 @@ export default function Chat() {
           </div>
         </aside>
 
-        <section class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div
           ref={element => {
             messagesContainerRef = element;
@@ -583,6 +600,54 @@ export default function Chat() {
           </Show>
         </div>
         </section>
+
+        <aside class="flex h-72 min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm lg:h-full lg:w-96">
+          <div class="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
+            <h2 class="text-sm font-semibold text-slate-900">Reports</h2>
+            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+              {reportMessages().length}
+            </span>
+          </div>
+
+          <div class="min-h-0 flex-1 overflow-y-auto p-2">
+            <Show
+              when={reportMessages().length > 0}
+              fallback={
+                <p class="px-3 py-4 text-sm leading-5 text-slate-500">
+                  No reports in this chat yet.
+                </p>
+              }
+            >
+              <div class="space-y-2">
+                <For each={reportMessages()}>
+                  {(message, index) => (
+                    <Collapsible class="rounded-md border border-slate-200 bg-white">
+                      <CollapsibleTrigger class="block w-full px-3 py-2 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-100">
+                        <span class="block text-sm font-medium text-slate-900">
+                          Report {index() + 1}
+                        </span>
+                        <span class="mt-1 block truncate text-xs leading-5 text-slate-500">
+                          {getReportPreview(message.content) || "Report in progress..."}
+                        </span>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent class="border-t border-slate-200 px-3 py-3 text-sm leading-6 text-slate-800">
+                        <Show
+                          when={hasMounted()}
+                          fallback={<div class="whitespace-pre-wrap">{message.content}</div>}
+                        >
+                          <div
+                            class="report-markdown"
+                            innerHTML={renderMarkdown(message.content)}
+                          />
+                        </Show>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
+        </aside>
       </div>
     </main>
   );
