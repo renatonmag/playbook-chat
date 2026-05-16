@@ -115,6 +115,7 @@ export const tradingAgentStepSchema = z.enum([
   "extract_latest_event",
   "retrieve_docs",
   "build_market_state",
+  "answer_pattern_questions",
   "generate_report",
 ]);
 

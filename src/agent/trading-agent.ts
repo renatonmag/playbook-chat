@@ -24,6 +24,7 @@ import {
 } from "./schemas";
 import {
   freeformTradingSystemPrompt,
+  questionsSystemPrompt,
   technicalAnalysisSystemPrompt,
 } from "./prompts";
 import { AVAILABLE_PATTERNS, PATTERN_DOCS } from "../pattern-docs/patterns";
@@ -52,6 +53,7 @@ const TRADING_AGENT_STEPS = [
   "extract_latest_event",
   "retrieve_docs",
   "build_market_state",
+  "answer_pattern_questions",
   "generate_report",
 ] as const satisfies readonly TradingAgentStep[];
 const TRADING_AGENT_STEP_LABELS = {
@@ -59,6 +61,7 @@ const TRADING_AGENT_STEP_LABELS = {
   extract_latest_event: "Extracting latest event",
   retrieve_docs: "Retrieving pattern context",
   build_market_state: "Building market state",
+  answer_pattern_questions: "Answering pattern questions",
   generate_report: "Generating report",
 } as const satisfies Record<TradingAgentStep, string>;
 
@@ -122,6 +125,7 @@ const AgentState = new StateSchema({
   detectedPatterns: z.array(z.string()).default([]),
   latestEvent: latestEventSchema.optional(),
   patternDocs: z.array(z.string()).default([]),
+  patternAnswers: z.array(z.string()).default([]),
   marketState: marketStateSchema.optional(),
   report: z.string().optional(),
 });
@@ -343,7 +347,9 @@ const extractLatestEvent: GraphNode<typeof AgentState> = async (
 
   const analysis = await getLatestEventModel().invoke(
     `
-You extract the latest market event for a price action trading workflow.
+- You are a trading-pattern assistant using Al Brooks price action methodology. 
+- Use Al Brooks priceaction terminology
+- You extract the latest market event for a price action trading workflow.
 
 Return an object. Set hasMarketEvent to false when the latest user message does not contain a new market observation.
 
@@ -451,7 +457,7 @@ const buildMarketState: GraphNode<typeof AgentState> = async (
   // ${transcript}
   const marketStateResponse = await getMarketStateModel().invoke(
     `
-You are a market structure extraction assistant for an Al Brooks price action trading workflow.
+You are a market structure extraction assistant for an Al Brooks price action metodology trading workflow.
 
 Build a conservative structured market state from the transcript and detected patterns.
 
@@ -498,6 +504,32 @@ Rules:
   };
 };
 
+const answerPatternQuestions: GraphNode<typeof AgentState> = async (
+  state,
+  config,
+): Promise<AgentStateUpdate> => {
+  if (!state.marketState || state.patternDocs.length === 0) {
+    return {
+      patternAnswers: [],
+    };
+  }
+
+  const result = await getTradingModel().invoke(
+    questionsSystemPrompt({
+      previousMarketState: state.previousMarketState ?? null,
+      marketState: state.marketState,
+      latestEvent: state.latestEvent ?? state.marketState.latestEvent ?? null,
+      patternDocs: state.patternDocs,
+    }),
+    config,
+  );
+  const answer = contentToText(result.content).trim();
+
+  return {
+    patternAnswers: answer ? [answer] : [],
+  };
+};
+
 function buildReportPrompt(state: AgentStateType) {
   const marketState = state.marketState;
 
@@ -517,10 +549,10 @@ function buildReportPrompt(state: AgentStateType) {
   }
 
   return technicalAnalysisSystemPrompt({
-    detectedPatterns: state.detectedPatterns,
     previousMarketState: state.previousMarketState ?? null,
     marketState,
     latestEvent: state.latestEvent ?? marketState.latestEvent ?? null,
+    patternAnswers: state.patternAnswers,
   });
 }
 
@@ -552,12 +584,14 @@ const graph = new StateGraph(AgentState)
   .addNode("extract_latest_event", extractLatestEvent)
   .addNode("retrieve_docs", retrieveDocs)
   .addNode("build_market_state", buildMarketState)
+  .addNode("answer_pattern_questions", answerPatternQuestions)
   .addNode("generate_report", generateReport)
   .addEdge(START, "detect_patterns")
   .addEdge("detect_patterns", "extract_latest_event")
   .addEdge("extract_latest_event", "retrieve_docs")
   .addEdge("retrieve_docs", "build_market_state")
-  .addEdge("build_market_state", "generate_report")
+  .addEdge("build_market_state", "answer_pattern_questions")
+  .addEdge("answer_pattern_questions", "generate_report")
   .addEdge("generate_report", END)
   .compile();
 

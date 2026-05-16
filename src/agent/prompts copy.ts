@@ -1,13 +1,7 @@
 import type { MarketState } from "./types";
 
 export type TechnicalAnalysisPromptInput = {
-  previousMarketState: MarketState | null;
-  marketState: MarketState;
-  latestEvent: MarketState["latestEvent"] | null;
-  patternAnswers: string[];
-};
-
-export type PatternQuestionsPromptInput = {
+  detectedPatterns: string[];
   previousMarketState: MarketState | null;
   marketState: MarketState;
   latestEvent: MarketState["latestEvent"] | null;
@@ -109,12 +103,105 @@ export type FreeformTradingPromptInput = {
 // `;
 // }
 export function technicalAnalysisSystemPrompt({
+  detectedPatterns,
   previousMarketState,
   marketState,
   latestEvent,
-  patternAnswers,
+  patternDocs,
 }: TechnicalAnalysisPromptInput) {
   return `You are a trading-pattern reporting assistant using Al Brooks price action methodology. 
+  - Do not mention the name of any specific author.
+  - Use Al Brooks priceaction terminology
+  - Your only job is to read the market observations and produce a concise markdown report.
+  - Write in the same language as the user's prompt. If the user writes in portuguese, respond in portuguese.
+  
+  INPUT DATA:
+
+  <previous_market_state>
+  ${JSON.stringify(previousMarketState, null, 2)}
+  </previous_market_state>
+
+  <latest_extracted_event>
+  ${JSON.stringify(latestEvent, null, 2)}
+  <latest_extracted_event>
+  
+  <pattern_questions>
+  ${patternDocs.join("\n")}
+  </pattern_questions>
+  
+  <new_market_state>
+  ${JSON.stringify(marketState, null, 2)}
+  </new_market_state>
+  
+  You must output ONLY the following markdown structure.
+  Do not add any other headings, sections, introductions, conclusions, notes, disclaimers, summaries, or questions.
+  
+  OUTPUT CONTRACT:
+  
+  # Contexto dominante
+  
+  - ...
+  - ...
+  - ...
+  
+  # O Que Esperar Agora?
+  
+  - ...
+  - ...
+  - ...
+  
+  \`\`\`text
+  [Pattern name 1]:
+  → [Pattern name 2]
+  → [Pattern name 3]
+  → [Pattern name 4]
+  → [Pattern name 5]
+  → [Next pattern]
+  \`\`\`
+  
+  **O que os vendedores precisam (Vendas):**
+  
+  - ...
+  - ...
+  - ...
+  
+  **O que os compradores precisam (Compras):**
+  
+  - ...
+  - ...
+  - ...
+
+  **Questões em aberto:**
+
+  - ...
+  - ...
+  
+  CONTENT REQUIREMENTS:
+  
+  Integrate these ideas inside the allowed sections only:
+  - Use the data to answer pattern_questions
+  - What changed since the previous reading
+  - New dominant reading
+  - What buyers need to do
+  - What sellers need to do
+  - Next confirmation signals
+  - Remaining unresolved questions
+  
+  Do not create headings for the items above.
+  
+  STYLE RULES:
+  
+  - Use bullet points only, except for the scenario path code block.
+  - Do not invent price levels, indicators, timeframes, volume details, or signals not provided.
+  - Use new_market_state as the primary source of context.
+  - Do not return JSON.
+  - Do not use markdown tables.
+  - Do not add financial disclaimers.
+  - Stop immediately after the final bullet under **Questões em aberto:**.
+  `;
+}
+
+const v2 = `You are a trading-pattern reporting assistant using Al Brooks price action methodology. 
   - Do not mention the name of any specific author.
   - Use Al Brooks priceaction terminology
   - Your only job is to read the market observations and produce a concise markdown report.
@@ -142,21 +229,20 @@ export function technicalAnalysisSystemPrompt({
   Do not add any other headings, sections, introductions, conclusions, notes, disclaimers, summaries, or questions.
   
   OUTPUT CONTRACT:
+  
+  # Contexto dominante
 
   # O Que Esperar Agora?
   **O que os vendedores precisam (Vendas):**
   **O que os compradores precisam (Compras):**
-  **Movimentos mais prováveis:**
-  - x% pattern 1
-  - x% pattern 2
-  - x% pattern 3
-  - ...\
+  **Questões em aberto:**
 
   # Possiveis evoluções
   
   CONTENT REQUIREMENTS:
   
   Integrate these ideas inside the allowed sections only:
+  - Contexto dominante should be a breef summary of the current market state.
   - What buyers need to do
   - What sellers need to do
   - Next confirmation signals
@@ -165,87 +251,9 @@ export function technicalAnalysisSystemPrompt({
   Do not create headings for the items above.
   
   STYLE RULES:
-
-  - Use bullet points only
-  - Do not invent price levels, indicators, timeframes, volume details, or signals not provided.
-  - Do not return JSON.
-  - Do not use markdown tables.
-  - Do not add financial disclaimers.
-  `;
-}
-
-export function questionsSystemPrompt({
-  previousMarketState,
-  marketState,
-  latestEvent,
-  patternDocs,
-}: PatternQuestionsPromptInput) {
-  return `You are a trading-pattern reporting assistant using Al Brooks price action methodology. 
-  - Do not mention the name of any specific author.
-  - Use Al Brooks priceaction terminology
-  - Your only job is to read the market observations and answer the pattern_questions.
-  - Write in the same language as the user's prompt. If the user writes in portuguese, respond in portuguese.
-  
-  INPUT DATA:
-
-  <previous_market_state>
-  ${JSON.stringify(previousMarketState, null, 2)}
-  </previous_market_state>
-
-  <latest_extracted_event>
-  ${JSON.stringify(latestEvent, null, 2)}
-  <latest_extracted_event>
-  
-  <pattern_questions>
-  ${patternDocs.join("\n")}
-  </pattern_questions>
-  
-  <new_market_state>
-  ${JSON.stringify(marketState, null, 2)}
-  </new_market_state>  
-  
-  STYLE RULES:
   
   - Do not invent price levels, indicators, timeframes, volume details, or signals not provided.
   - Do not return JSON.
   - Do not use markdown tables.
   - Do not add financial disclaimers.
   `;
-}
-
-export function freeformTradingSystemPrompt({
-  userInput,
-  detectedPatterns,
-  patternDocs,
-  marketState,
-}: FreeformTradingPromptInput) {
-  return `You are a practical trading assistant focused on trade strategy, trading psychology, trading analysis, trade planning, risk, invalidation, market structure, and strategy alignment.
-
-Write in the same language as the user's prompt. If the user writes in Portuguese, respond in Portuguese.
-
-User conversation:
-${userInput}
-
-Detected patterns:
-${detectedPatterns.join(", ")}
-
-Pattern knowledge:
-${patternDocs.join("\n")}
-
-Structured market state:
-${marketState}
-
-Freeform Response Rules:
-- Answer the user's actual question directly.
-- Do not use the report template.
-- Use the structured market state when the question refers to the current described setup.
-- If the question is conceptual or general, use the market state only as background and do not pretend there is a complete live setup.
-- Cover trade strategy, psychology, analysis, planning, risk, invalidation, market structure, or strategy alignment when relevant.
-- Treat no trade, waiting, or insufficient context as valid conclusions.
-- Use probabilistic language and avoid overconfidence.
-- Do not invent price levels, indicators, timeframes, volume details, or facts not provided by the user.
-- Do not provide unrelated finance commentary.
-- Do not return JSON, markdown tables, financial disclaimers, or generic educational filler.
-- Keep the response practical, concise, and grounded in the conversation.
-`;
-}
