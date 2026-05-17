@@ -106,6 +106,7 @@ export const chatMessageMetadataSchema = z.object({
 
 export const tradingAgentResultSchema = z.object({
   state: agentStateSchema,
+  freeform: z.string().trim().min(1),
   report: z.string().trim().min(1),
   marketState: marketStateSchema,
 });
@@ -116,6 +117,7 @@ export const tradingAgentStepSchema = z.enum([
   "retrieve_docs",
   "build_market_state",
   "answer_pattern_questions",
+  "generate_freeform",
   "generate_report",
 ]);
 

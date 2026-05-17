@@ -18,7 +18,6 @@ import {
   marketStateSchema,
   rangeLocationSchema,
   rangeTypeSchema,
-  responseStyleSchema,
   structureStatusSchema,
   tradingAgentResultSchema,
 } from "./schemas";
@@ -54,6 +53,7 @@ const TRADING_AGENT_STEPS = [
   "retrieve_docs",
   "build_market_state",
   "answer_pattern_questions",
+  "generate_freeform",
   "generate_report",
 ] as const satisfies readonly TradingAgentStep[];
 const TRADING_AGENT_STEP_LABELS = {
@@ -62,6 +62,7 @@ const TRADING_AGENT_STEP_LABELS = {
   retrieve_docs: "Retrieving pattern context",
   build_market_state: "Building market state",
   answer_pattern_questions: "Answering pattern questions",
+  generate_freeform: "Generating response",
   generate_report: "Generating report",
 } as const satisfies Record<TradingAgentStep, string>;
 
@@ -120,13 +121,13 @@ const conversationTranscriptMessageSchema = z.object({
 
 const AgentState = new StateSchema({
   userInput: z.array(conversationTranscriptMessageSchema),
-  responseStyle: responseStyleSchema.default("report"),
   previousMarketState: marketStateSchema.nullable().optional(),
   detectedPatterns: z.array(z.string()).default([]),
   latestEvent: latestEventSchema.optional(),
   patternDocs: z.array(z.string()).default([]),
   patternAnswers: z.array(z.string()).default([]),
   marketState: marketStateSchema.optional(),
+  freeform: z.string().optional(),
   report: z.string().optional(),
 });
 
@@ -230,6 +231,19 @@ function extractReportFromNodeOutput(output: unknown) {
   return "";
 }
 
+function extractFreeformFromNodeOutput(output: unknown) {
+  if (
+    output &&
+    typeof output === "object" &&
+    "freeform" in output &&
+    typeof output.freeform === "string"
+  ) {
+    return output.freeform.trim();
+  }
+
+  return "";
+}
+
 function extractMarketStateFromNodeOutput(output: unknown) {
   if (output && typeof output === "object" && "marketState" in output) {
     return marketStateSchema.parse(output.marketState);
@@ -243,7 +257,9 @@ function buildConversationTranscript(
   prompt: string,
 ): ConversationTranscriptMessage[] {
   return [
-    ...history.map(({ role, content }) => ({ role, content })),
+    ...history
+      .filter((message) => message.metadata?.responseStyle !== "report")
+      .map(({ role, content }) => ({ role, content })),
     { role: "user", content: prompt },
   ];
 }
@@ -465,10 +481,6 @@ Build a conservative structured market state from the transcript and detected pa
 ${state.previousMarketState ? JSON.stringify(state.previousMarketState, null, 2) : "None"}
 </previous_market_state>
 
-<important_patterns_questions>
-${state.patternDocs.join("\n")}
-</important_patterns_questions>
-
 <detected_patterns>
 ${state.detectedPatterns.join(", ")}
 </detected_patterns>
@@ -530,22 +542,29 @@ const answerPatternQuestions: GraphNode<typeof AgentState> = async (
   };
 };
 
-function buildReportPrompt(state: AgentStateType) {
+function getBuiltMarketState(state: AgentStateType) {
   const marketState = state.marketState;
 
   if (!marketState) {
     throw new Error("Trading agent could not build market state.");
   }
 
+  return marketState;
+}
+
+function buildFreeformPrompt(state: AgentStateType) {
+  const marketState = getBuiltMarketState(state);
   const transcript = conversationTranscriptToText(state.userInput);
 
-  if (state.responseStyle === "freeform") {
-    return freeformTradingSystemPrompt({
-      userInput: transcript,
-      previousMarketState: state.previousMarketState ?? null,
-      marketState: JSON.stringify(marketState, null, 2),
-    });
-  }
+  return freeformTradingSystemPrompt({
+    userInput: transcript,
+    previousMarketState: state.previousMarketState ?? null,
+    marketState: JSON.stringify(marketState, null, 2),
+  });
+}
+
+function buildTechnicalReportPrompt(state: AgentStateType) {
+  const marketState = getBuiltMarketState(state);
 
   return technicalAnalysisSystemPrompt({
     previousMarketState: state.previousMarketState ?? null,
@@ -555,11 +574,34 @@ function buildReportPrompt(state: AgentStateType) {
   });
 }
 
+const generateFreeform: GraphNode<typeof AgentState> = async (
+  state,
+  config,
+): Promise<AgentStateUpdate> => {
+  const prompt = buildFreeformPrompt(state);
+  const chunks = await getTradingModel().stream(prompt, config);
+  let freeform = "";
+
+  for await (const chunk of chunks) {
+    freeform += contentToText(chunk.content);
+  }
+
+  const trimmedFreeform = freeform.trim();
+
+  if (!trimmedFreeform) {
+    throw new Error("Trading agent returned an empty freeform response.");
+  }
+
+  return {
+    freeform: trimmedFreeform,
+  };
+};
+
 const generateReport: GraphNode<typeof AgentState> = async (
   state,
   config,
 ): Promise<AgentStateUpdate> => {
-  const prompt = buildReportPrompt(state);
+  const prompt = buildTechnicalReportPrompt(state);
   const chunks = await getTradingModel().stream(prompt, config);
   let report = "";
 
@@ -581,17 +623,19 @@ const generateReport: GraphNode<typeof AgentState> = async (
 const graph = new StateGraph(AgentState)
   .addNode("detect_patterns", detectPatterns)
   .addNode("extract_latest_event", extractLatestEvent)
-  .addNode("retrieve_docs", retrieveDocs)
+  // .addNode("retrieve_docs", retrieveDocs)
   .addNode("build_market_state", buildMarketState)
   // .addNode("answer_pattern_questions", answerPatternQuestions)
+  .addNode("generate_freeform", generateFreeform)
   .addNode("generate_report", generateReport)
   .addEdge(START, "detect_patterns")
   .addEdge("detect_patterns", "extract_latest_event")
-  .addEdge("extract_latest_event", "retrieve_docs")
-  .addEdge("retrieve_docs", "build_market_state")
+  .addEdge("extract_latest_event", "build_market_state")
+  // .addEdge("retrieve_docs", "build_market_state")
   // .addEdge("build_market_state", "answer_pattern_questions")
   // .addEdge("answer_pattern_questions", "generate_report")
-  .addEdge("build_market_state", "generate_report")
+  .addEdge("build_market_state", "generate_freeform")
+  .addEdge("generate_freeform", "generate_report")
   .addEdge("generate_report", END)
   .compile();
 
@@ -611,7 +655,6 @@ function buildGraphInput(input: TradingAgentInput) {
 
   return {
     userInput: transcript,
-    responseStyle: input.responseStyle,
     previousMarketState: input.previousMarketState ?? null,
   };
 }
@@ -637,7 +680,12 @@ async function runTradingAgentImpl(
 ): Promise<TradingAgentResult> {
   try {
     const graphResult = await graph.invoke(buildGraphInput(input));
+    const freeform = graphResult.freeform?.trim();
     const report = graphResult.report?.trim();
+
+    if (!freeform) {
+      throw new Error("Trading agent returned an empty freeform response.");
+    }
 
     if (!report) {
       throw new Error("Trading agent returned an empty report.");
@@ -645,6 +693,7 @@ async function runTradingAgentImpl(
 
     const result = tradingAgentResultSchema.parse({
       state: "analysis_ready",
+      freeform,
       report,
       marketState: graphResult.marketState,
     });
@@ -677,6 +726,8 @@ export async function* streamTradingAgent(
       version: "v2",
       ...(signal ? { signal } : {}),
     });
+    let streamedFreeform = "";
+    let finalFreeform = "";
     let streamedReport = "";
     let finalReport = "";
     let marketState: MarketState | undefined;
@@ -696,6 +747,14 @@ export async function* streamTradingAgent(
         if (isTradingAgentStep(node) && event.name === node) {
           yield createStepEvent(node, "completed");
 
+          if (node === "generate_freeform") {
+            const freeform = extractFreeformFromNodeOutput(event.data?.output);
+
+            if (freeform) {
+              finalFreeform = freeform;
+            }
+          }
+
           if (node === "generate_report") {
             const report = extractReportFromNodeOutput(event.data?.output);
 
@@ -712,12 +771,12 @@ export async function* streamTradingAgent(
 
       if (
         event.event === "on_chat_model_stream" &&
-        event.metadata?.langgraph_node === "generate_report"
+        event.metadata?.langgraph_node === "generate_freeform"
       ) {
         const delta = contentToText(event.data?.chunk?.content);
 
         if (delta) {
-          streamedReport += delta;
+          streamedFreeform += delta;
 
           yield {
             type: "text_delta",
@@ -725,9 +784,21 @@ export async function* streamTradingAgent(
           };
         }
       }
+
+      if (
+        event.event === "on_chat_model_stream" &&
+        event.metadata?.langgraph_node === "generate_report"
+      ) {
+        streamedReport += contentToText(event.data?.chunk?.content);
+      }
     }
 
+    const freeform = finalFreeform.trim() || streamedFreeform.trim();
     const report = finalReport.trim() || streamedReport.trim();
+
+    if (!freeform) {
+      throw new Error("Trading agent returned an empty freeform response.");
+    }
 
     if (!report) {
       throw new Error("Trading agent returned an empty report.");
@@ -739,6 +810,7 @@ export async function* streamTradingAgent(
 
     return tradingAgentResultSchema.parse({
       state: "analysis_ready",
+      freeform,
       report,
       marketState,
     });

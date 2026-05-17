@@ -39,7 +39,6 @@ export type MarketState = z.infer<typeof marketStateSchema>;
 export type TradingAgentInput = {
   prompt: string;
   history: ChatMessage[];
-  responseStyle: ResponseStyle;
   previousMarketState?: MarketState | null;
 };
 

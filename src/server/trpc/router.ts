@@ -2,10 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { desc } from "drizzle-orm";
 import { z } from "zod";
 import { runTradingAgent, streamTradingAgent } from "~/agent";
-import {
-  agentStateSchema,
-  responseStyleSchema,
-} from "~/agent/schemas";
+import { agentStateSchema } from "~/agent/schemas";
 import { db } from "~/db";
 import { chatThreadsTable, type ChatMessage } from "~/db/schema";
 import { PATTERN_DOCS } from "~/pattern-docs/patterns";
@@ -23,13 +20,13 @@ import { publicProcedure, router } from "./init";
 const chatInputSchema = z.object({
   threadId: z.string().uuid().optional(),
   message: z.string().trim().min(1),
-  responseStyle: responseStyleSchema.default("report"),
 });
 
 const chatResponseSchema = z.object({
   threadId: z.string().uuid(),
   messages: chatMessagesSchema,
   message: z.string().min(1),
+  report: z.string().min(1),
   state: agentStateSchema,
 });
 
@@ -50,20 +47,26 @@ async function resolveChatThread(threadId: string | undefined) {
 
 async function sendChatMessage(input: z.infer<typeof chatInputSchema>) {
   const thread = await resolveChatThread(input.threadId);
-  const userMessage = createMessage("user", input.message, {
-    responseStyle: input.responseStyle,
-  });
+  const userMessage = createMessage("user", input.message);
   const result = await runTradingAgent({
     prompt: input.message,
     history: thread.messages,
-    responseStyle: input.responseStyle,
     previousMarketState: thread.marketState ?? null,
   });
-  const assistantMessage = createMessage("assistant", result.report, {
+  const freeformMessage = createMessage("assistant", result.freeform, {
     agentState: result.state,
-    responseStyle: input.responseStyle,
+    responseStyle: "freeform",
   });
-  const messages = [...thread.messages, userMessage, assistantMessage];
+  const reportMessage = createMessage("assistant", result.report, {
+    agentState: result.state,
+    responseStyle: "report",
+  });
+  const messages = [
+    ...thread.messages,
+    userMessage,
+    freeformMessage,
+    reportMessage,
+  ];
   const updatedThread = await updateThread(thread.id, messages, {
     marketState: result.marketState,
   });
@@ -71,7 +74,8 @@ async function sendChatMessage(input: z.infer<typeof chatInputSchema>) {
   return {
     threadId: updatedThread.id,
     messages: updatedThread.messages,
-    message: result.report,
+    message: result.freeform,
+    report: result.report,
     state: result.state,
   };
 }
@@ -129,18 +133,17 @@ export const appRouter = router({
       .input(chatInputSchema)
       .mutation(async function* ({ input, signal }) {
         const thread = await resolveChatThread(input.threadId);
-        const userMessage = createMessage("user", input.message, {
-          responseStyle: input.responseStyle,
-        });
+        const userMessage = createMessage("user", input.message);
         const messagesWithUser: ChatMessage[] = [
           ...thread.messages,
           userMessage,
         ];
         const userThread = await updateThread(thread.id, messagesWithUser);
-        const assistantMessageId = crypto.randomUUID();
+        const freeformAssistantMessageId = crypto.randomUUID();
+        const reportAssistantMessageId = crypto.randomUUID();
         const assistantMetadata = {
           agentState: "analysis_ready" as const,
-          responseStyle: input.responseStyle,
+          responseStyle: "freeform" as const,
         };
         let assistantStarted = false;
 
@@ -154,7 +157,6 @@ export const appRouter = router({
           {
             prompt: input.message,
             history: thread.messages,
-            responseStyle: input.responseStyle,
             previousMarketState: thread.marketState ?? null,
           },
           signal,
@@ -169,14 +171,14 @@ export const appRouter = router({
 
               yield {
                 type: "assistant_start" as const,
-                messageId: assistantMessageId,
+                messageId: freeformAssistantMessageId,
                 metadata: assistantMetadata,
               };
             }
 
             yield {
               type: "assistant_delta" as const,
-              messageId: assistantMessageId,
+              messageId: freeformAssistantMessageId,
               delta: next.value.delta,
             };
           } else {
@@ -187,17 +189,31 @@ export const appRouter = router({
         }
 
         const result = next.value;
-        const finalAssistantMetadata = {
+        const finalFreeformMetadata = {
           agentState: result.state,
-          responseStyle: input.responseStyle,
+          responseStyle: "freeform" as const,
         };
-        const assistantMessage: ChatMessage = {
-          id: assistantMessageId,
+        const reportMetadata = {
+          agentState: result.state,
+          responseStyle: "report" as const,
+        };
+        const freeformMessage: ChatMessage = {
+          id: freeformAssistantMessageId,
+          role: "assistant",
+          content: result.freeform,
+          metadata: finalFreeformMetadata,
+        };
+        const reportMessage: ChatMessage = {
+          id: reportAssistantMessageId,
           role: "assistant",
           content: result.report,
-          metadata: finalAssistantMetadata,
+          metadata: reportMetadata,
         };
-        const finalMessages = [...messagesWithUser, assistantMessage];
+        const finalMessages = [
+          ...messagesWithUser,
+          freeformMessage,
+          reportMessage,
+        ];
         const updatedThread = await updateThread(userThread.id, finalMessages, {
           marketState: result.marketState,
         });
@@ -205,8 +221,8 @@ export const appRouter = router({
         if (!assistantStarted) {
           yield {
             type: "assistant_start" as const,
-            messageId: assistantMessageId,
-            metadata: finalAssistantMetadata,
+            messageId: freeformAssistantMessageId,
+            metadata: finalFreeformMetadata,
           };
         }
 
@@ -214,7 +230,8 @@ export const appRouter = router({
           type: "complete" as const,
           threadId: updatedThread.id,
           messages: updatedThread.messages,
-          message: result.report,
+          message: result.freeform,
+          report: result.report,
           state: result.state,
         };
       }),

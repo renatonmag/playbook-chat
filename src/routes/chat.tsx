@@ -71,8 +71,16 @@ function isReportMessage(message: ChatMessage) {
   );
 }
 
+function isConversationMessage(message: ChatMessage) {
+  return !isReportMessage(message);
+}
+
 function getReportPreview(content: string) {
   return content.replace(/\s+/g, " ").trim().slice(0, 96);
+}
+
+function pluralize(count: number, singular: string, plural: string) {
+  return count === 1 ? singular : plural;
 }
 
 export default function Chat() {
@@ -81,7 +89,6 @@ export default function Chat() {
   const [messages, setMessages] = createSignal<ChatMessage[]>([]);
   const [patternDocs, setPatternDocs] = createSignal<PatternDocs>({});
   const [draft, setDraft] = createSignal("");
-  const [responseStyle, setResponseStyle] = createSignal<ResponseStyle>("report");
   const [isLoadingThread, setIsLoadingThread] = createSignal(true);
   const [isLoadingThreads, setIsLoadingThreads] = createSignal(true);
   const [isLoadingPatternDocs, setIsLoadingPatternDocs] = createSignal(false);
@@ -95,7 +102,8 @@ export default function Chat() {
   let messagesContainerRef: HTMLDivElement | undefined;
 
   const canSubmit = () => draft().trim().length > 0 && !isSending() && !isLoadingThread();
-  const reportMessages = () => messages().filter(isReportMessage);
+  const conversationMessages = () => messages().filter(isConversationMessage);
+  const reportMessages = () => [...messages().filter(isReportMessage)].reverse();
   const patternDocEntries = () =>
     Object.entries(patternDocs()).sort(([left], [right]) =>
       left.localeCompare(right),
@@ -124,17 +132,18 @@ export default function Chat() {
   }
 
   function getThreadSubtitle(thread: ChatThread) {
-    const count = thread.messages.length;
+    const conversationCount = thread.messages.filter(isConversationMessage).length;
+    const reportCount = thread.messages.filter(isReportMessage).length;
 
-    if (count === 0) {
+    if (conversationCount === 0 && reportCount === 0) {
       return "No messages yet";
     }
 
-    if (count === 1) {
-      return "1 message";
-    }
-
-    return `${count} messages`;
+    return `${conversationCount} ${pluralize(
+      conversationCount,
+      "message",
+      "messages",
+    )} · ${reportCount} ${pluralize(reportCount, "report", "reports")}`;
   }
 
   async function loadThreads() {
@@ -347,14 +356,10 @@ export default function Chat() {
     }
 
     const previousMessages = messages();
-    const selectedResponseStyle = responseStyle();
     const optimisticUserMessage: ChatMessage = {
       id: createMessageId(),
       role: "user",
       content: message,
-      metadata: {
-        responseStyle: selectedResponseStyle,
-      },
     };
 
     setError("");
@@ -369,7 +374,6 @@ export default function Chat() {
       const stream = await getTRPCClient().chat.stream.mutate({
         threadId: threadId(),
         message,
-        responseStyle: selectedResponseStyle,
       });
 
       for await (const event of stream) {
@@ -515,7 +519,7 @@ export default function Chat() {
           class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-6"
         >
           <Show
-            when={!isLoadingThread() && messages().length > 0}
+            when={!isLoadingThread() && conversationMessages().length > 0}
             fallback={
               <div class="flex justify-start">
                 <p class="max-w-[80%] rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-700">
@@ -530,7 +534,7 @@ export default function Chat() {
               </div>
             }
           >
-            <For each={messages()}>
+            <For each={conversationMessages()}>
               {message => {
                 const shouldRenderMarkdown = () =>
                   hasMounted() && shouldRenderAssistantMarkdown(message);
@@ -591,20 +595,6 @@ export default function Chat() {
 
         <div class="shrink-0 border-t border-slate-200 bg-white p-3 sm:p-4">
           <div class="flex flex-col gap-3 sm:flex-row">
-            <label class="flex flex-col gap-1 text-xs font-medium text-slate-600 sm:w-32">
-              Style
-              <select
-                value={responseStyle()}
-                onChange={event =>
-                  setResponseStyle(event.currentTarget.value as ResponseStyle)
-                }
-                disabled={isSending()}
-                class="h-10 rounded-md border border-slate-300 bg-white px-2 text-sm font-medium text-slate-950 outline-none transition focus:border-sky-600 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-50"
-              >
-                <option value="report">Report</option>
-                <option value="freeform">Freeform</option>
-              </select>
-            </label>
             <textarea
               value={draft()}
               onInput={event => setDraft(event.currentTarget.value)}
@@ -706,7 +696,7 @@ export default function Chat() {
                     <Collapsible class="rounded-md border border-slate-200 bg-white">
                       <CollapsibleTrigger class="block w-full px-3 py-2 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-100">
                         <span class="block text-sm font-medium text-slate-900">
-                          Report {index() + 1}
+                          Report {reportMessages().length - index()}
                         </span>
                         <span class="mt-1 block truncate text-xs leading-5 text-slate-500">
                           {getReportPreview(message.content) || "Report in progress..."}
