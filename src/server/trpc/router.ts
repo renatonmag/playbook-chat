@@ -8,6 +8,7 @@ import {
 } from "~/agent/schemas";
 import { db } from "~/db";
 import { chatThreadsTable, type ChatMessage } from "~/db/schema";
+import { PATTERN_DOCS } from "~/pattern-docs/patterns";
 import {
   chatMessagesSchema,
   createMessage,
@@ -85,6 +86,9 @@ export const appRouter = router({
     .query(({ input }) => ({
       message: `Hello, ${input.name}.`,
     })),
+  patternDocs: router({
+    list: publicProcedure.query(() => PATTERN_DOCS),
+  }),
   threads: router({
     list: publicProcedure.query(() =>
       db

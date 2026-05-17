@@ -1,14 +1,25 @@
 import { For, Show, createSignal, onMount } from "solid-js";
+import { BookOpenText } from "lucide-solid";
 import type { TradingAgentStep } from "~/agent";
+import { Button } from "~/components/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "~/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "~/components/ui/dialog";
 import { renderMarkdown } from "~/lib/render-markdown";
 import { getTRPCClient } from "~/lib/trpc/client";
 
 type ResponseStyle = "report" | "freeform";
+type PatternDocs = Record<string, string>;
 
 type ChatMessage = {
   id: string;
@@ -68,10 +79,12 @@ export default function Chat() {
   const [threads, setThreads] = createSignal<ChatThread[]>([]);
   const [threadId, setThreadId] = createSignal<string>();
   const [messages, setMessages] = createSignal<ChatMessage[]>([]);
+  const [patternDocs, setPatternDocs] = createSignal<PatternDocs>({});
   const [draft, setDraft] = createSignal("");
   const [responseStyle, setResponseStyle] = createSignal<ResponseStyle>("report");
   const [isLoadingThread, setIsLoadingThread] = createSignal(true);
   const [isLoadingThreads, setIsLoadingThreads] = createSignal(true);
+  const [isLoadingPatternDocs, setIsLoadingPatternDocs] = createSignal(false);
   const [isCreatingThread, setIsCreatingThread] = createSignal(false);
   const [deletingThreadId, setDeletingThreadId] = createSignal<string>();
   const [isSending, setIsSending] = createSignal(false);
@@ -83,10 +96,15 @@ export default function Chat() {
 
   const canSubmit = () => draft().trim().length > 0 && !isSending() && !isLoadingThread();
   const reportMessages = () => messages().filter(isReportMessage);
+  const patternDocEntries = () =>
+    Object.entries(patternDocs()).sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
 
   onMount(() => {
     setHasMounted(true);
     void loadThreads();
+    void loadPatternDocs();
   });
 
   function scrollMessagesToBottom() {
@@ -144,6 +162,21 @@ export default function Chat() {
     } finally {
       setIsLoadingThread(false);
       setIsLoadingThreads(false);
+    }
+  }
+
+  async function loadPatternDocs() {
+    setIsLoadingPatternDocs(true);
+
+    try {
+      const nextPatternDocs = await getTRPCClient().patternDocs.list.query();
+      setPatternDocs(nextPatternDocs);
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error("Could not load pattern docs.", error);
+      }
+    } finally {
+      setIsLoadingPatternDocs(false);
     }
   }
 
@@ -508,7 +541,7 @@ export default function Chat() {
                     class={
                       message.role === "user"
                         ? "max-w-[80%] whitespace-pre-wrap rounded-lg rounded-br-sm bg-sky-700 px-4 py-3 text-sm leading-6 text-white"
-                        : "max-w-[80%] rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-800"
+                        : "prose prose-slate max-w-[80%] rounded-lg rounded-bl-sm bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-800"
                     }
                   >
                     <Show
@@ -603,10 +636,59 @@ export default function Chat() {
 
         <aside class="flex h-72 min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm lg:h-full lg:w-96">
           <div class="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
-            <h2 class="text-sm font-semibold text-slate-900">Reports</h2>
-            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-              {reportMessages().length}
-            </span>
+            <div class="flex items-center gap-2">
+              <h2 class="text-sm font-semibold text-slate-900">Reports</h2>
+              <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                {reportMessages().length}
+              </span>
+            </div>
+
+            <Dialog>
+              <DialogTrigger
+                as={Button<"button">}
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label="Open pattern docs"
+                title="Pattern docs"
+                disabled={isLoadingPatternDocs()}
+                class="size-9 shrink-0"
+              >
+                <BookOpenText class="size-4" aria-hidden="true" />
+              </DialogTrigger>
+              <DialogContent class="max-h-[85vh] max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Pattern docs</DialogTitle>
+                  <DialogDescription>
+                    Local pattern reference loaded for this chat page.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <Show
+                  when={patternDocEntries().length > 0}
+                  fallback={
+                    <p class="text-sm leading-6 text-slate-500">
+                      {isLoadingPatternDocs()
+                        ? "Loading pattern docs..."
+                        : "Pattern docs are not available."}
+                    </p>
+                  }
+                >
+                  <div class="space-y-3">
+                    <For each={patternDocEntries()}>
+                      {([name, content]) => (
+                        <section class="rounded-md border border-slate-200 bg-white p-3">
+                          <h3 class="text-sm font-semibold text-slate-900">{name}</h3>
+                          <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                            {content}
+                          </p>
+                        </section>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </DialogContent>
+            </Dialog>
           </div>
 
           <div class="min-h-0 flex-1 overflow-y-auto p-2">
@@ -636,7 +718,7 @@ export default function Chat() {
                           fallback={<div class="whitespace-pre-wrap">{message.content}</div>}
                         >
                           <div
-                            class="report-markdown"
+                            class="prose prose-slate report-markdown"
                             innerHTML={renderMarkdown(message.content)}
                           />
                         </Show>

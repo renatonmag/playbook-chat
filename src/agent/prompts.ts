@@ -16,8 +16,7 @@ export type PatternQuestionsPromptInput = {
 
 export type FreeformTradingPromptInput = {
   userInput: string;
-  detectedPatterns: string[];
-  patternDocs: string[];
+  previousMarketState: MarketState | null;
   marketState: string;
 };
 
@@ -117,7 +116,7 @@ export function technicalAnalysisSystemPrompt({
   return `You are a trading-pattern reporting assistant using Al Brooks price action methodology. 
   - Do not mention the name of any specific author.
   - Use Al Brooks priceaction terminology
-  - Your only job is to read the market observations and produce a concise markdown report.
+  - Your only job is to read the market observations and produce markdown report.
   - Write in the same language as the user's prompt. If the user writes in portuguese, respond in portuguese.
   
   INPUT DATA:
@@ -130,10 +129,6 @@ export function technicalAnalysisSystemPrompt({
   ${JSON.stringify(latestEvent, null, 2)}
   <latest_extracted_event>
   
-  <pattern_answers>
-  ${patternAnswers.length > 0 ? patternAnswers.join("\n") : "None"}
-  </pattern_answers>
-  
   <new_market_state>
   ${JSON.stringify(marketState, null, 2)}
   </new_market_state>  
@@ -143,18 +138,19 @@ export function technicalAnalysisSystemPrompt({
   
   OUTPUT CONTRACT:
 
-  # O Que Esperar Agora?
+  ### O Que Esperar Agora?
   **O que os vendedores precisam (Vendas):**
   **O que os compradores precisam (Compras):**
   **Movimentos mais prováveis:**
   - pattern 1
   - pattern 2
   - pattern 3
-  - ...\
+  - ...
 
   CONTENT REQUIREMENTS:
   
   Integrate these ideas inside the allowed sections only:
+  - bias one side, is it more likely to go up or down?
   - What buyers need to do
   - What sellers need to do
   - Next confirmation signals
@@ -163,7 +159,7 @@ export function technicalAnalysisSystemPrompt({
   
   STYLE RULES:
 
-  - Use bullet points only
+  - Use bullet points only for the phrases
   - Do not invent price levels, indicators, timeframes, volume details, or signals not provided.
   - Do not return JSON.
   - Do not use markdown tables.
@@ -212,25 +208,24 @@ export function questionsSystemPrompt({
 
 export function freeformTradingSystemPrompt({
   userInput,
-  detectedPatterns,
-  patternDocs,
+  previousMarketState,
   marketState,
 }: FreeformTradingPromptInput) {
   return `You are a practical trading assistant focused on trade strategy, trading psychology, trading analysis, trade planning, risk, invalidation, market structure, and strategy alignment.
 
 Write in the same language as the user's prompt. If the user writes in Portuguese, respond in Portuguese.
 
-User conversation:
+<user_input>
 ${userInput}
+</user_input> 
 
-Detected patterns:
-${detectedPatterns.join(", ")}
+<previous_market_state>
+${JSON.stringify(previousMarketState, null, 2)}
+</previous_market_state>
 
-Pattern knowledge:
-${patternDocs.join("\n")}
-
-Structured market state:
-${marketState}
+<new_market_state>
+${JSON.stringify(marketState, null, 2)}
+</new_market_state> 
 
 Freeform Response Rules:
 - Answer the user's actual question directly.

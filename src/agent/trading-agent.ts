@@ -542,8 +542,7 @@ function buildReportPrompt(state: AgentStateType) {
   if (state.responseStyle === "freeform") {
     return freeformTradingSystemPrompt({
       userInput: transcript,
-      detectedPatterns: state.detectedPatterns,
-      patternDocs: state.patternDocs,
+      previousMarketState: state.previousMarketState ?? null,
       marketState: JSON.stringify(marketState, null, 2),
     });
   }
