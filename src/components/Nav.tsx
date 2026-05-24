@@ -16,6 +16,12 @@ export default function Nav() {
         <li class={`border-b-2 ${active("/chat")} mx-1.5 sm:mx-6`}>
           <a href="/chat">Chat</a>
         </li>
+        <li class={`border-b-2 ${active("/react")} mx-1.5 sm:mx-6`}>
+          <a href="/react">ReAct</a>
+        </li>
+        <li class={`border-b-2 ${active("/chart")} mx-1.5 sm:mx-6`}>
+          <a href="/chart">Chart</a>
+        </li>
       </ul>
     </nav>
   );

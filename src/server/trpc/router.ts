@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { desc } from "drizzle-orm";
 import { z } from "zod";
-import { runTradingAgent, streamTradingAgent } from "~/agent";
+import { runTradingAgent, streamReactAgent, streamTradingAgent } from "~/agent";
 import { agentStateSchema } from "~/agent/schemas";
 import { db } from "~/db";
 import { chatThreadsTable, type ChatMessage } from "~/db/schema";
@@ -15,11 +15,31 @@ import {
   getThreadById,
   updateThread,
 } from "~/server/chat-store";
+import {
+  EmptyMarketDataRangeError,
+  getWinM5CandlesInRange,
+  getWinM5Last100Candles,
+  InvalidMarketDataRangeError,
+  marketDataRangeResponseSchema,
+  marketDataResponseSchema,
+} from "~/server/market-data";
 import { publicProcedure, router } from "./init";
 
 const chatInputSchema = z.object({
   threadId: z.string().uuid().optional(),
   message: z.string().trim().min(1),
+});
+
+const reactChatInputSchema = z.object({
+  message: z.string().trim().min(1),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().trim().min(1),
+      }),
+    )
+    .default([]),
 });
 
 const chatResponseSchema = z.object({
@@ -28,6 +48,11 @@ const chatResponseSchema = z.object({
   message: z.string().min(1),
   report: z.string().min(1),
   state: agentStateSchema,
+});
+
+const marketDataRangeInputSchema = z.object({
+  startDate: z.string().trim().min(1),
+  endDate: z.string().trim().min(1),
 });
 
 async function resolveChatThread(threadId: string | undefined) {
@@ -92,6 +117,51 @@ export const appRouter = router({
     })),
   patternDocs: router({
     list: publicProcedure.query(() => PATTERN_DOCS),
+  }),
+  marketData: router({
+    winM5Last100: publicProcedure
+      .output(marketDataResponseSchema)
+      .query(async () => {
+        try {
+          return await getWinM5Last100Candles();
+        } catch (error) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Could not load WIN@N M5 candle data.",
+            cause: error,
+          });
+        }
+      }),
+    winM5Range: publicProcedure
+      .input(marketDataRangeInputSchema)
+      .output(marketDataRangeResponseSchema)
+      .query(async ({ input }) => {
+        try {
+          return await getWinM5CandlesInRange(input);
+        } catch (error) {
+          if (error instanceof InvalidMarketDataRangeError) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: error.message,
+              cause: error,
+            });
+          }
+
+          if (error instanceof EmptyMarketDataRangeError) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: error.message,
+              cause: error,
+            });
+          }
+
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Could not load WIN@N M5 candle data.",
+            cause: error,
+          });
+        }
+      }),
   }),
   threads: router({
     list: publicProcedure.query(() =>
@@ -233,6 +303,43 @@ export const appRouter = router({
           message: result.freeform,
           report: result.report,
           state: result.state,
+        };
+      }),
+  }),
+  react: router({
+    stream: publicProcedure
+      .input(reactChatInputSchema)
+      .mutation(async function* ({ input, signal }) {
+        const assistantMessageId = crypto.randomUUID();
+
+        yield {
+          type: "assistant_start" as const,
+          messageId: assistantMessageId,
+        };
+
+        const agentStream = streamReactAgent(input, signal);
+        let next = await agentStream.next();
+
+        while (!next.done) {
+          if (next.value.type === "text_delta") {
+            yield {
+              type: "assistant_delta" as const,
+              messageId: assistantMessageId,
+              delta: next.value.delta,
+            };
+          } else {
+            yield next.value;
+          }
+
+          next = await agentStream.next();
+        }
+
+        const result = next.value;
+
+        yield {
+          type: "complete" as const,
+          messageId: assistantMessageId,
+          message: result.message,
         };
       }),
   }),
