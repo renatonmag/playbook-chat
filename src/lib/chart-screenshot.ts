@@ -121,6 +121,7 @@ export async function takeWinM5ChartScreenshot(
         textColor: "#334155",
         fontFamily:
           'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        attributionLogo: false,
       },
       grid: {
         vertLines: {
