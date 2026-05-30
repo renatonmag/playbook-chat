@@ -26,7 +26,7 @@ function makeTRPCClient() {
   return createTRPCClient<AppRouter>({
     links: [
       splitLink({
-        condition: op => op.path === "chat.stream" || op.path === "react.stream",
+        condition: op => op.path === "chat.stream",
         true: httpBatchStreamLink({
           url: getTRPCBaseUrl(),
           maxItems: 1,

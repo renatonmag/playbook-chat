@@ -1,5 +1,9 @@
 export { runTradingAgent, streamTradingAgent } from "./trading-agent";
-export { runReactAgent, streamReactAgent } from "./react-agent";
+export {
+  barAnalysisSchema,
+  chartRenderRequestSchema,
+  runPriceActionAgent,
+} from "./react-agent";
 export type {
   TradingAgentInput,
   TradingAgentResult,
@@ -7,8 +11,9 @@ export type {
   TradingAgentStepEvent,
 } from "./trading-agent";
 export type {
-  ReactAgentInput,
-  ReactAgentResult,
-  ReactAgentStreamEvent,
+  BarAnalysis,
+  ChartRenderRequest,
+  PriceActionAgentMemory,
+  PriceActionAgentState,
 } from "./react-agent";
 export type { AgentState, MarketState } from "./types";

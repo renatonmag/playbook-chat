@@ -1,7 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import { desc } from "drizzle-orm";
 import { z } from "zod";
-import { runTradingAgent, streamReactAgent, streamTradingAgent } from "~/agent";
+import {
+  barAnalysisSchema,
+  chartRenderRequestSchema,
+  runPriceActionAgent,
+  runTradingAgent,
+  streamTradingAgent,
+} from "~/agent";
 import { agentStateSchema } from "~/agent/schemas";
 import { db } from "~/db";
 import { chatThreadsTable, type ChatMessage } from "~/db/schema";
@@ -30,16 +36,14 @@ const chatInputSchema = z.object({
   message: z.string().trim().min(1),
 });
 
-const reactChatInputSchema = z.object({
-  message: z.string().trim().min(1),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant"]),
-        content: z.string().trim().min(1),
-      }),
-    )
-    .default([]),
+const priceActionMemorySchema = z.object({
+  previousPrediction: z.string().nullable().optional(),
+  previousAnalysis: barAnalysisSchema.nullable().optional(),
+  history: z.array(barAnalysisSchema).optional(),
+});
+
+const reactAnalyzeChartInputSchema = chartRenderRequestSchema.extend({
+  previousState: priceActionMemorySchema.optional(),
 });
 
 const chatResponseSchema = z.object({
@@ -307,39 +311,26 @@ export const appRouter = router({
       }),
   }),
   react: router({
-    stream: publicProcedure
-      .input(reactChatInputSchema)
-      .mutation(async function* ({ input, signal }) {
-        const assistantMessageId = crypto.randomUUID();
+    analyzeChart: publicProcedure
+      .input(reactAnalyzeChartInputSchema)
+      .mutation(async ({ input }) => {
+        const { previousState, ...renderRequest } = input;
+        const state = await runPriceActionAgent(renderRequest, previousState);
 
-        yield {
-          type: "assistant_start" as const,
-          messageId: assistantMessageId,
-        };
-
-        const agentStream = streamReactAgent(input, signal);
-        let next = await agentStream.next();
-
-        while (!next.done) {
-          if (next.value.type === "text_delta") {
-            yield {
-              type: "assistant_delta" as const,
-              messageId: assistantMessageId,
-              delta: next.value.delta,
-            };
-          } else {
-            yield next.value;
-          }
-
-          next = await agentStream.next();
+        if (!state.result) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Price action agent returned no analysis.",
+          });
         }
 
-        const result = next.value;
-
-        yield {
-          type: "complete" as const,
-          messageId: assistantMessageId,
-          message: result.message,
+        return {
+          analysis: state.result,
+          previousState: {
+            previousPrediction: state.previousPrediction,
+            previousAnalysis: state.previousAnalysis,
+            history: state.history,
+          },
         };
       }),
   }),
