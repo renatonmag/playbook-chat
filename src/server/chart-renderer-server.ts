@@ -2,6 +2,13 @@ import express from "express";
 import { writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { ChartRenderer, type ChartRenderCandle } from "./chart-renderer";
+import {
+  getCandlesEndingAt,
+  InvalidMarketDataRangeError,
+  loadWinM5Candles,
+  MarketDataCandleNotFoundError,
+  type MarketDataCandle,
+} from "./market-data";
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_WIDTH = 1000;
@@ -17,16 +24,11 @@ const chartCandleSchema = z.object({
   close: z.number().finite(),
 });
 
-const wma30PointSchema = z.object({
-  time: z.number().int().positive(),
-  value: z.number().finite(),
-});
-
 const renderRequestSchema = z.object({
+  lastCandleTime: z.string().trim().min(1),
+  candleCount: z.number().int().positive(),
   symbol: z.string().trim().optional(),
   timeframe: z.string().trim().optional(),
-  candles: z.array(chartCandleSchema).nonempty(),
-  wma30: z.array(wma30PointSchema).optional(),
 });
 
 const newBarRequestSchema = chartCandleSchema.extend({
@@ -121,22 +123,27 @@ const renderer = new ChartRenderer({
   width,
   height,
 });
-let candles = generateDemoCandles();
+let loadedCandles: MarketDataCandle[] = [];
+let legacyCandles = generateDemoCandles();
 
 app.get("/health", (_request, response) => {
   response.json({
     ok: true,
-    ready: true,
-    candles: candles.length,
+    ready: loadedCandles.length > 0,
+    candles: loadedCandles.length,
   });
 });
 
 app.get("/chart.png", async (_request, response) => {
   try {
+    const latestCandles = loadedCandles.slice(
+      -Math.min(100, loadedCandles.length),
+    );
+
     const png = await renderer.render({
-      symbol: "BTCUSDT",
-      timeframe: "15m",
-      candles,
+      symbol: "WIN@N",
+      timeframe: "M5",
+      candles: latestCandles,
     });
 
     response.setHeader("Content-Type", "image/png");
@@ -160,12 +167,12 @@ app.post("/new-bar", async (request, response) => {
       close: bar.close,
     };
 
-    candles = [...candles, nextCandle].slice(-MAX_CANDLES);
+    legacyCandles = [...legacyCandles, nextCandle].slice(-MAX_CANDLES);
 
     const png = await renderer.render({
       symbol: bar.symbol || "BTCUSDT",
       timeframe: bar.timeframe || "15m",
-      candles,
+      candles: legacyCandles,
     });
 
     await writeFile(outputFile, png);
@@ -174,7 +181,7 @@ app.post("/new-bar", async (request, response) => {
       ok: true,
       message: "New bar processed and chart image rendered.",
       imageFile: outputFile,
-      candles: candles.length,
+      candles: legacyCandles.length,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -194,11 +201,15 @@ app.post("/new-bar", async (request, response) => {
 app.post("/render", async (request, response) => {
   try {
     const payload = renderRequestSchema.parse(request.body);
+    const selectedCandles = getCandlesEndingAt({
+      candles: loadedCandles,
+      lastCandleTime: payload.lastCandleTime,
+      candleCount: payload.candleCount,
+    });
     const png = await renderer.render({
-      symbol: payload.symbol || "UNKNOWN",
-      timeframe: payload.timeframe || "",
-      candles: payload.candles,
-      wma30: payload.wma30,
+      symbol: payload.symbol || "WIN@N",
+      timeframe: payload.timeframe || "M5",
+      candles: selectedCandles,
     });
 
     response.setHeader("Content-Type", "image/png");
@@ -206,6 +217,20 @@ app.post("/render", async (request, response) => {
   } catch (error) {
     if (error instanceof z.ZodError) {
       response.status(400).json({
+        error: getErrorMessage(error),
+      });
+      return;
+    }
+
+    if (error instanceof InvalidMarketDataRangeError) {
+      response.status(400).json({
+        error: getErrorMessage(error),
+      });
+      return;
+    }
+
+    if (error instanceof MarketDataCandleNotFoundError) {
+      response.status(404).json({
         error: getErrorMessage(error),
       });
       return;
@@ -225,11 +250,13 @@ async function stopRendererAndExit(signal: NodeJS.Signals) {
 }
 
 async function main() {
+  loadedCandles = await loadWinM5Candles();
   await renderer.start();
 
   app.listen(port, () => {
     console.log(`Renderer running on http://localhost:${port}`);
-    console.log(`Open demo chart: http://localhost:${port}/chart.png`);
+    console.log(`Loaded ${loadedCandles.length} WIN@N M5 candles.`);
+    console.log(`Open latest chart: http://localhost:${port}/chart.png`);
   });
 }
 

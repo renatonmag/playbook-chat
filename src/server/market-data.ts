@@ -16,6 +16,8 @@ const candleSchema = z.object({
   close: z.number().finite(),
 });
 
+export type MarketDataCandle = z.infer<typeof candleSchema>;
+
 export const marketDataResponseSchema = z.object({
   symbol: z.literal("WIN@N"),
   timeframe: z.literal("M5"),
@@ -48,6 +50,13 @@ export class EmptyMarketDataRangeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "EmptyMarketDataRangeError";
+  }
+}
+
+export class MarketDataCandleNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MarketDataCandleNotFoundError";
   }
 }
 
@@ -126,7 +135,17 @@ async function readWinM5Candles() {
     .filter(Boolean);
   const rows = lines.slice(1);
 
-  return rows.map(parseCandleRow);
+  return rows
+    .map(parseCandleRow)
+    .sort((left, right) => left.time - right.time);
+}
+
+let winM5CandlesPromise: Promise<MarketDataCandle[]> | undefined;
+
+export function loadWinM5Candles(): Promise<MarketDataCandle[]> {
+  winM5CandlesPromise ??= readWinM5Candles();
+
+  return winM5CandlesPromise;
 }
 
 function parseInputDate(value: string, label: string) {
@@ -140,7 +159,7 @@ function parseInputDate(value: string, label: string) {
 }
 
 export async function getWinM5Last100Candles(): Promise<MarketDataResponse> {
-  const candles = await readWinM5Candles();
+  const candles = await loadWinM5Candles();
   const lastCandles = candles.slice(-100);
 
   if (lastCandles.length < 100) {
@@ -170,7 +189,7 @@ export async function getWinM5CandlesInRange(input: {
 
   const startTimestampSeconds = Math.floor(startTimestamp / 1000);
   const endTimestampSeconds = Math.floor(endTimestamp / 1000);
-  const candles = await readWinM5Candles();
+  const candles = await loadWinM5Candles();
   const rangeCandles = candles.filter(
     candle =>
       candle.time >= startTimestampSeconds && candle.time <= endTimestampSeconds,
@@ -190,4 +209,44 @@ export async function getWinM5CandlesInRange(input: {
     count: rangeCandles.length,
     candles: rangeCandles,
   });
+}
+
+export function getCandlesEndingAt(input: {
+  candles: readonly MarketDataCandle[];
+  lastCandleTime: string;
+  candleCount: number;
+}): MarketDataCandle[] {
+  const lastCandleTimestamp = parseInputDate(
+    input.lastCandleTime,
+    "lastCandleTime",
+  );
+  const lastCandleTimestampSeconds = Math.floor(lastCandleTimestamp / 1000);
+  const matchedIndex = input.candles.findIndex(
+    candle => candle.time === lastCandleTimestampSeconds,
+  );
+
+  if (matchedIndex === -1) {
+    const normalizedLastCandleTime = new Date(
+      lastCandleTimestamp,
+    ).toISOString();
+
+    throw new MarketDataCandleNotFoundError(
+      `No WIN@N M5 candle found at ${normalizedLastCandleTime}.`,
+    );
+  }
+
+  const endIndex = matchedIndex + 1;
+  const startIndex = endIndex - input.candleCount;
+
+  if (startIndex < 0) {
+    const normalizedLastCandleTime = new Date(
+      lastCandleTimestamp,
+    ).toISOString();
+
+    throw new InvalidMarketDataRangeError(
+      `Requested ${input.candleCount} candles, but only ${endIndex} candles are available at or before ${normalizedLastCandleTime}.`,
+    );
+  }
+
+  return input.candles.slice(startIndex, endIndex);
 }
