@@ -36,10 +36,14 @@ const chatInputSchema = z.object({
   message: z.string().trim().min(1),
 });
 
+const legacyBarAnalysisSchema = barAnalysisSchema.extend({
+  longerTermPrediction: z.string().trim().min(1).optional(),
+});
+
 const priceActionMemorySchema = z.object({
   previousPrediction: z.string().nullable().optional(),
-  previousAnalysis: barAnalysisSchema.nullable().optional(),
-  history: z.array(barAnalysisSchema).optional(),
+  previousAnalysis: legacyBarAnalysisSchema.nullable().optional(),
+  history: z.array(legacyBarAnalysisSchema).optional(),
 });
 
 const reactAnalyzeChartInputSchema = chartRenderRequestSchema.extend({

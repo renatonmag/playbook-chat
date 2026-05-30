@@ -3,7 +3,10 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 
-const BarAnalysisSchema = z.object({
+const LEGACY_LONGER_TERM_PREDICTION =
+  "No longer-term prediction was stored for this earlier response.";
+
+const ImmediateBarAnalysisSchema = z.object({
   mode: z.enum(["initial_analysis", "followup_analysis"]),
   recentMove: z.string(),
   corroborationWithPreviousPrediction: z.string().nullable(),
@@ -12,6 +15,26 @@ const BarAnalysisSchema = z.object({
   invalidation: z.string(),
   conciseForecast: z.string(),
 });
+
+const LongerTermPredictionSchema = z.object({
+  longerTermPrediction: z.string().trim().min(1),
+});
+
+const BarAnalysisSchema = ImmediateBarAnalysisSchema.extend({
+  longerTermPrediction: z.string().trim().min(1),
+});
+
+const LegacyBarAnalysisSchema = ImmediateBarAnalysisSchema.extend({
+  longerTermPrediction: z.string().trim().min(1).optional(),
+});
+
+const priceActionMemoryInputSchema = z
+  .object({
+    previousPrediction: z.string().nullable().optional(),
+    previousAnalysis: LegacyBarAnalysisSchema.nullable().optional(),
+    history: z.array(LegacyBarAnalysisSchema).optional(),
+  })
+  .optional();
 
 export const barAnalysisSchema = BarAnalysisSchema;
 
@@ -23,6 +46,7 @@ export const chartRenderRequestSchema = z.object({
 });
 
 export type BarAnalysis = z.infer<typeof BarAnalysisSchema>;
+type ImmediateBarAnalysis = z.infer<typeof ImmediateBarAnalysisSchema>;
 export type ChartRenderRequest = z.infer<typeof chartRenderRequestSchema>;
 
 const AgentState = Annotation.Root({
@@ -39,6 +63,10 @@ const AgentState = Annotation.Root({
     reducer: (left, right) => left.concat(right),
     default: () => [],
   }),
+  currentAnalysis: Annotation<ImmediateBarAnalysis | null>({
+    reducer: (_left, right) => right,
+    default: () => null,
+  }),
   result: Annotation<BarAnalysis | null>({
     reducer: (_left, right) => right,
     default: () => null,
@@ -54,7 +82,14 @@ export type PriceActionAgentMemory = Pick<
 const model = new ChatOpenAI({
   model: "gpt-5.4-mini",
   temperature: 0.2,
-}).withStructuredOutput(BarAnalysisSchema);
+});
+
+const immediateAnalysisModel = model.withStructuredOutput(
+  ImmediateBarAnalysisSchema,
+);
+const longerTermPredictionModel = model.withStructuredOutput(
+  LongerTermPredictionSchema,
+);
 
 function getChartRendererUrl() {
   return (
@@ -118,7 +153,7 @@ Task:
 5. Be probabilistic, not certain.
 `;
 
-  const response = await model.invoke([
+  const response = await immediateAnalysisModel.invoke([
     {
       role: "system",
       content: `
@@ -169,31 +204,144 @@ Return structured analysis only.
   ]);
 
   return {
-    result: response,
-    previousPrediction: response.prediction,
-    previousAnalysis: response,
-    history: [response],
+    currentAnalysis: response,
+  };
+}
+
+function formatPreviousResponses(history: BarAnalysis[]) {
+  if (history.length === 0) {
+    return "None.";
+  }
+
+  return history
+    .map(
+      (item, index) => `
+Response ${index + 1}:
+- mode: ${item.mode}
+- recent move: ${item.recentMove}
+- immediate prediction: ${item.prediction}
+- longer-term prediction: ${item.longerTermPrediction}
+- invalidation: ${item.invalidation}
+- concise forecast: ${item.conciseForecast}`,
+    )
+    .join("\n");
+}
+
+async function createLongerTermPrediction(state: typeof AgentState.State) {
+  if (!state.currentAnalysis) {
+    throw new Error(
+      "Cannot create longer-term prediction without current analysis.",
+    );
+  }
+
+  const response = await longerTermPredictionModel.invoke([
+    {
+      role: "system",
+      content: `
+You are an Al Brooks Price Action trading assistant.
+
+Your only job is to create a longer-horizon forecast from the latest active move and previous agent responses.
+This is not an immediate next-bar prediction.
+
+Rules:
+- Use the current recent move as the anchor.
+- Use previous responses only as continuity/context, not as stronger evidence than the current chart analysis.
+- Forecast the likely path over the next several swings or legs.
+- Distinguish continuation, pullback, trading range, breakout mode, and reversal scenarios when relevant.
+- Be probabilistic, not certain.
+- Mention invalidation or context shifts only when supported by the current analysis or previous responses.
+- Use the chart image to verify the current active move and context, but do not override the structured current analysis unless the image clearly supports the correction.
+- Do not give financial advice or trade instructions.
+- Do not invent price levels, exact targets, volume, indicators, or unsupported timeframe details.
+- Return structured output only.
+`,
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `
+Current analysis:
+${JSON.stringify(state.currentAnalysis, null, 2)}
+
+Previous short prediction:
+${state.previousPrediction ?? "None."}
+
+Previous analysis:
+${state.previousAnalysis ? JSON.stringify(state.previousAnalysis, null, 2) : "None."}
+
+Previous response history:
+${formatPreviousResponses(state.history)}
+`,
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: state.imageDataUrl,
+          },
+        },
+      ],
+    },
+  ]);
+
+  const finalAnalysis = {
+    ...state.currentAnalysis,
+    longerTermPrediction: response.longerTermPrediction,
+  };
+
+  return {
+    result: finalAnalysis,
+    previousPrediction: finalAnalysis.prediction,
+    previousAnalysis: finalAnalysis,
+    history: [finalAnalysis],
   };
 }
 
 const graph = new StateGraph(AgentState)
   .addNode("analyzeChart", analyzeChart)
+  .addNode("createLongerTermPrediction", createLongerTermPrediction)
   .addEdge(START, "analyzeChart")
-  .addEdge("analyzeChart", END)
+  .addEdge("analyzeChart", "createLongerTermPrediction")
+  .addEdge("createLongerTermPrediction", END)
   .compile();
+
+function normalizeLegacyAnalysis(
+  analysis: z.infer<typeof LegacyBarAnalysisSchema>,
+): BarAnalysis {
+  return {
+    ...analysis,
+    longerTermPrediction:
+      analysis.longerTermPrediction ?? LEGACY_LONGER_TERM_PREDICTION,
+  };
+}
+
+function normalizePreviousState(previousState: unknown): PriceActionAgentMemory {
+  const parsedState = priceActionMemoryInputSchema.parse(previousState);
+
+  return {
+    previousPrediction: parsedState?.previousPrediction ?? null,
+    previousAnalysis: parsedState?.previousAnalysis
+      ? normalizeLegacyAnalysis(parsedState.previousAnalysis)
+      : null,
+    history: (parsedState?.history ?? []).map(normalizeLegacyAnalysis),
+  };
+}
 
 export async function runPriceActionAgent(
   renderRequest: ChartRenderRequest,
-  previousState?: Partial<PriceActionAgentMemory>,
+  previousState?: unknown,
 ) {
   const parsedRequest = chartRenderRequestSchema.parse(renderRequest);
+  const normalizedPreviousState = normalizePreviousState(previousState);
   const imageDataUrl = await renderChartToDataUrl(parsedRequest);
 
   const result = await graph.invoke({
     imageDataUrl,
-    previousPrediction: previousState?.previousPrediction ?? null,
-    previousAnalysis: previousState?.previousAnalysis ?? null,
-    history: previousState?.history ?? [],
+    previousPrediction: normalizedPreviousState.previousPrediction,
+    previousAnalysis: normalizedPreviousState.previousAnalysis,
+    history: normalizedPreviousState.history,
+    currentAnalysis: null,
     result: null,
   });
 

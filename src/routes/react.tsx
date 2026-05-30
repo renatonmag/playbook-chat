@@ -8,6 +8,7 @@ type BarAnalysis = {
   corroborationWithPreviousPrediction: string | null;
   alBrooksContext: string;
   prediction: string;
+  longerTermPrediction: string;
   invalidation: string;
   conciseForecast: string;
 };
@@ -295,6 +296,10 @@ export default function ReactChat() {
                 <AnalysisSection
                   label="Prediction"
                   value={currentAnalysis().prediction}
+                />
+                <AnalysisSection
+                  label="Longer-Term Prediction"
+                  value={currentAnalysis().longerTermPrediction}
                 />
                 <AnalysisSection
                   label="Invalidation"
