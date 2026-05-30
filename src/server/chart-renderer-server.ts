@@ -17,7 +17,7 @@ const chartCandleSchema = z.object({
   close: z.number().finite(),
 });
 
-const ma20PointSchema = z.object({
+const wma30PointSchema = z.object({
   time: z.number().int().positive(),
   value: z.number().finite(),
 });
@@ -26,7 +26,7 @@ const renderRequestSchema = z.object({
   symbol: z.string().trim().optional(),
   timeframe: z.string().trim().optional(),
   candles: z.array(chartCandleSchema).nonempty(),
-  ma20: z.array(ma20PointSchema).optional(),
+  wma30: z.array(wma30PointSchema).optional(),
 });
 
 const newBarRequestSchema = chartCandleSchema.extend({
@@ -198,7 +198,7 @@ app.post("/render", async (request, response) => {
       symbol: payload.symbol || "UNKNOWN",
       timeframe: payload.timeframe || "",
       candles: payload.candles,
-      ma20: payload.ma20,
+      wma30: payload.wma30,
     });
 
     response.setHeader("Content-Type", "image/png");

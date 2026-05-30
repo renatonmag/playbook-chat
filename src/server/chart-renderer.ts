@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import puppeteer, { type Browser, type Page } from "puppeteer";
+import { wma } from "technicalindicators";
 
 const require = createRequire(import.meta.url);
 const lightweightChartsPackagePath = require.resolve(
@@ -36,7 +37,7 @@ export type ChartRenderPayload = {
   symbol?: string;
   timeframe?: string;
   candles: ChartRenderCandle[];
-  ma20?: ChartRenderLinePoint[];
+  wma30?: ChartRenderLinePoint[];
 };
 
 type ChartRendererOptions = {
@@ -44,21 +45,136 @@ type ChartRendererOptions = {
   height?: number;
 };
 
-function calculateSma(candles: ChartRenderCandle[], period = 20) {
-  const result: ChartRenderLinePoint[] = [];
+type BrowserChartConfig = {
+  width: number;
+  height: number;
+};
 
-  for (let index = period - 1; index < candles.length; index += 1) {
-    const slice = candles.slice(index - period + 1, index + 1);
-    const average =
-      slice.reduce((sum, candle) => sum + candle.close, 0) / period;
+type BrowserChartPayload = {
+  symbol?: string;
+  timeframe?: string;
+  candles: ChartRenderCandle[];
+  wma30: ChartRenderLinePoint[];
+};
 
-    result.push({
-      time: candles[index].time,
-      value: Number(average.toFixed(2)),
-    });
+type BrowserSeriesApi = {
+  setData(data: unknown[]): void;
+};
+
+type BrowserChartApi = {
+  addSeries(seriesDefinition: unknown, options: unknown): BrowserSeriesApi;
+  timeScale(): {
+    fitContent(): void;
+  };
+};
+
+type BrowserLightweightCharts = {
+  CandlestickSeries: unknown;
+  CrosshairMode: {
+    Normal: unknown;
+  };
+  LineSeries: unknown;
+  createChart(container: HTMLElement, options: unknown): BrowserChartApi;
+};
+
+declare global {
+  interface Window {
+    LightweightCharts?: BrowserLightweightCharts;
+    __chartReady?: boolean;
+    setChartData?: (payload: BrowserChartPayload) => void;
+  }
+}
+
+function calculateWma(candles: ChartRenderCandle[], period = 30) {
+  const values = candles.map(candle => candle.close);
+  const averages = wma({ period, values });
+
+  return averages.map((value, index) => ({
+    time: candles[index + period - 1].time,
+    value: Number(value.toFixed(2)),
+  }));
+}
+
+function initializeChartPage(config: BrowserChartConfig) {
+  const lightweightCharts = window.LightweightCharts;
+
+  if (!lightweightCharts) {
+    throw new Error("Lightweight Charts was not loaded.");
   }
 
-  return result;
+  window.__chartReady = false;
+
+  const chartContainer = document.getElementById("chart");
+
+  if (!chartContainer) {
+    throw new Error("Chart container was not found.");
+  }
+
+  const chart = lightweightCharts.createChart(chartContainer, {
+    width: config.width,
+    height: config.height,
+    layout: {
+      background: { color: "#ffffff" },
+      textColor: "#334155",
+      fontFamily:
+        'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      attributionLogo: false,
+    },
+    grid: {
+      vertLines: { color: "#e5e7eb" },
+      horzLines: { color: "#e5e7eb" },
+    },
+    rightPriceScale: {
+      borderColor: "#cbd5e1",
+      visible: true,
+    },
+    timeScale: {
+      borderColor: "#cbd5e1",
+      timeVisible: true,
+      secondsVisible: false,
+    },
+    crosshair: {
+      mode: lightweightCharts.CrosshairMode.Normal,
+    },
+  });
+
+  const candleSeries = chart.addSeries(lightweightCharts.CandlestickSeries, {
+    upColor: "#089981",
+    downColor: "#f23645",
+    borderVisible: false,
+    wickUpColor: "#089981",
+    wickDownColor: "#f23645",
+    priceFormat: {
+      type: "price",
+      precision: 0,
+      minMove: 5,
+    },
+  });
+
+  const wma30Series = chart.addSeries(lightweightCharts.LineSeries, {
+    color: "#2962ff",
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: true,
+  });
+
+  window.setChartData = payload => {
+    window.__chartReady = false;
+
+    const { candles, wma30 } = payload;
+
+    candleSeries.setData(candles);
+    wma30Series.setData(wma30);
+    chart.timeScale().fitContent();
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.__chartReady = true;
+      });
+    });
+  };
+
+  window.__chartReady = true;
 }
 
 export class ChartRenderer {
@@ -93,7 +209,10 @@ export class ChartRenderer {
       path: lightweightChartsPath,
     });
 
-    await this.page.evaluate(this.createChartScript());
+    await this.page.evaluate(initializeChartPage, {
+      width: this.width,
+      height: this.height,
+    });
   }
 
   async render(payload: ChartRenderPayload) {
@@ -156,89 +275,6 @@ export class ChartRenderer {
     `;
   }
 
-  private createChartScript() {
-    return `
-      (() => {
-        window.__chartReady = false;
-
-        const chartContainer = document.getElementById("chart");
-
-        if (!chartContainer) {
-          throw new Error("Chart container was not found.");
-        }
-
-        const chart = LightweightCharts.createChart(chartContainer, {
-          width: ${JSON.stringify(this.width)},
-          height: ${JSON.stringify(this.height)},
-          layout: {
-            background: { color: "#ffffff" },
-            textColor: "#334155",
-            fontFamily:
-              'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-            attributionLogo: false,
-          },
-          grid: {
-            vertLines: { color: "#e5e7eb" },
-            horzLines: { color: "#e5e7eb" },
-          },
-          rightPriceScale: {
-            borderColor: "#cbd5e1",
-            visible: true,
-          },
-          timeScale: {
-            borderColor: "#cbd5e1",
-            timeVisible: true,
-            secondsVisible: false,
-          },
-          crosshair: {
-            mode: LightweightCharts.CrosshairMode.Normal,
-          },
-        });
-
-        const candleSeries = chart.addSeries(
-          LightweightCharts.CandlestickSeries,
-          {
-            upColor: "#089981",
-            downColor: "#f23645",
-            borderVisible: false,
-            wickUpColor: "#089981",
-            wickDownColor: "#f23645",
-            priceFormat: {
-              type: "price",
-              precision: 0,
-              minMove: 5,
-            },
-          },
-        );
-
-        const ma20Series = chart.addSeries(LightweightCharts.LineSeries, {
-          color: "#2962ff",
-          lineWidth: 2,
-          priceLineVisible: false,
-          lastValueVisible: true,
-        });
-
-        window.setChartData = function setChartData(payload) {
-          window.__chartReady = false;
-
-          const { candles, ma20 } = payload;
-
-          candleSeries.setData(candles);
-          ma20Series.setData(ma20 || []);
-          chart.timeScale().fitContent();
-
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              window.__chartReady = true;
-            });
-          });
-        };
-
-        window.__chartReady = true;
-      })();
-    `;
-  }
-
   private async renderInternal(payload: ChartRenderPayload) {
     if (!this.page) {
       throw new Error("ChartRenderer has not been started. Call start() first.");
@@ -248,18 +284,23 @@ export class ChartRenderer {
       throw new Error("payload.candles must be a non-empty array.");
     }
 
-    const ma20 = payload.ma20 ?? calculateSma(payload.candles, 20);
+    const wma30 = payload.wma30 ?? calculateWma(payload.candles, 30);
+    const browserPayload = {
+      symbol: payload.symbol,
+      timeframe: payload.timeframe,
+      candles: payload.candles,
+      wma30,
+    } satisfies BrowserChartPayload;
 
-    await this.page.evaluate(
-      `window.setChartData(${JSON.stringify({
-        symbol: payload.symbol,
-        timeframe: payload.timeframe,
-        candles: payload.candles,
-        ma20,
-      } satisfies ChartRenderPayload)})`,
-    );
+    await this.page.evaluate(nextPayload => {
+      if (!window.setChartData) {
+        throw new Error("Chart data setter was not initialized.");
+      }
 
-    await this.page.waitForFunction("window.__chartReady === true", {
+      window.setChartData(nextPayload);
+    }, browserPayload);
+
+    await this.page.waitForFunction(() => window.__chartReady === true, {
       timeout: 5000,
     });
 
