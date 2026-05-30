@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
+import { traceable } from "langsmith/traceable";
 import { z } from "zod";
 
 const LEGACY_LONGER_TERM_PREDICTION =
@@ -83,6 +84,12 @@ const model = new ChatOpenAI({
   model: "gpt-5.4-mini",
   temperature: 0.2,
 });
+const DEFAULT_LANGSMITH_PROJECT = "playbook-chat";
+const BASE_TRACE_TAGS = [
+  "price-action-agent",
+  "langgraph",
+  "chart-analysis",
+] as const;
 
 const immediateAnalysisModel = model.withStructuredOutput(
   ImmediateBarAnalysisSchema,
@@ -90,6 +97,10 @@ const immediateAnalysisModel = model.withStructuredOutput(
 const longerTermPredictionModel = model.withStructuredOutput(
   LongerTermPredictionSchema,
 );
+
+function getLangSmithProjectName() {
+  return process.env.LANGSMITH_PROJECT?.trim() || DEFAULT_LANGSMITH_PROJECT;
+}
 
 function getChartRendererUrl() {
   return (
@@ -240,20 +251,31 @@ async function createLongerTermPrediction(state: typeof AgentState.State) {
       content: `
 You are an Al Brooks Price Action trading assistant.
 
-Your only job is to create a longer-horizon forecast from the latest active move and previous agent responses.
-This is not an immediate next-bar prediction.
+Focus on:
+- last active move
+- follow-through or lack of follow-through
+- trading range vs trend
+- higher low / lower high attempts
+- breakout mode
+- failed breakout
+- moving average interaction
+- signal bars and context
+- double top / double bottom 
+- canal estreito 
+- canal amplo 
+- giveup bar, surprise bar, reversal bar, trend bar 
+- spike and channel 
+- pullback 
+- segunda entrada 
+- falha de rompimento 
+- sell climax / buy climax 
+- always in long / always in short 
+- barras de tendência fortes/fracas 
+- microchannel 
+- wedge
 
-Rules:
-- Use the current recent move as the anchor.
-- Use previous responses only as continuity/context, not as stronger evidence than the current chart analysis.
-- Forecast the likely path over the next several swings or legs.
-- Distinguish continuation, pullback, trading range, breakout mode, and reversal scenarios when relevant.
-- Be probabilistic, not certain.
-- Mention invalidation or context shifts only when supported by the current analysis or previous responses.
-- Use the chart image to verify the current active move and context, but do not override the structured current analysis unless the image clearly supports the correction.
-- Do not give financial advice or trade instructions.
-- Do not invent price levels, exact targets, volume, indicators, or unsupported timeframe details.
-- Return structured output only.
+Do not give financial advice or trade instructions.
+Return structured analysis only.
 `,
     },
     {
@@ -262,18 +284,10 @@ Rules:
         {
           type: "text",
           text: `
-Current analysis:
-${JSON.stringify(state.currentAnalysis, null, 2)}
-
-Previous short prediction:
-${state.previousPrediction ?? "None."}
-
-Previous analysis:
-${state.previousAnalysis ? JSON.stringify(state.previousAnalysis, null, 2) : "None."}
-
-Previous response history:
-${formatPreviousResponses(state.history)}
-`,
+          If you have to make a prediction, not for the imidiate next bar, but for longer, couple moves.
+          Use the last active move, be smart about it.
+          Keep in 2 phrases.
+          `,
         },
         {
           type: "image_url",
@@ -316,7 +330,9 @@ function normalizeLegacyAnalysis(
   };
 }
 
-function normalizePreviousState(previousState: unknown): PriceActionAgentMemory {
+function normalizePreviousState(
+  previousState: unknown,
+): PriceActionAgentMemory {
   const parsedState = priceActionMemoryInputSchema.parse(previousState);
 
   return {
@@ -328,7 +344,7 @@ function normalizePreviousState(previousState: unknown): PriceActionAgentMemory 
   };
 }
 
-export async function runPriceActionAgent(
+async function runPriceActionAgentImpl(
   renderRequest: ChartRenderRequest,
   previousState?: unknown,
 ) {
@@ -347,3 +363,18 @@ export async function runPriceActionAgent(
 
   return result;
 }
+
+type RunPriceActionAgent = (
+  renderRequest: ChartRenderRequest,
+  previousState?: unknown,
+) => Promise<PriceActionAgentState>;
+
+export const runPriceActionAgent: RunPriceActionAgent = traceable(
+  runPriceActionAgentImpl,
+  {
+    name: "runPriceActionAgent",
+    run_type: "chain",
+    project_name: getLangSmithProjectName(),
+    tags: [...BASE_TRACE_TAGS],
+  },
+) as RunPriceActionAgent;
