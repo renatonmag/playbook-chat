@@ -284,7 +284,7 @@ Return structured analysis only.
         {
           type: "text",
           text: `
-          If you have to make a prediction, not for the imidiate next bar, but for longer, couple moves.
+          If you have to make a prediction, not for the immediate next bar, but for longer, couple moves.
           Use the last active move, be smart about it.
           Keep in 2 phrases.
           `,
