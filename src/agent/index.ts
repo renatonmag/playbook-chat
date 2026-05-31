@@ -2,6 +2,8 @@ export { runTradingAgent, streamTradingAgent } from "./trading-agent";
 export {
   barAnalysisSchema,
   chartRenderRequestSchema,
+  predictionMemorySchema,
+  priceActionMemoryInputSchema,
   runPriceActionAgent,
 } from "./react-agent";
 export type {

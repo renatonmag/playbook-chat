@@ -1,5 +1,10 @@
 import { sql } from "drizzle-orm";
 import { int, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import type {
+  BarAnalysis,
+  ChartRenderRequest,
+  PriceActionAgentMemory,
+} from "~/agent";
 import type { AgentState, MarketState, ResponseStyle } from "~/agent/types";
 
 export type ChatMessageMetadata = {
@@ -12,6 +17,21 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   metadata?: ChatMessageMetadata;
+};
+
+export type ReactAnalysisHistoryItem = {
+  candleTime: string;
+  chartRequest: ChartRenderRequest;
+  analysis: BarAnalysis;
+};
+
+export type ReactThreadState = {
+  lastCandleTime: string;
+  candleCount: number;
+  symbol: string;
+  timeframe: string;
+  previousState: PriceActionAgentMemory;
+  analysisHistory: ReactAnalysisHistoryItem[];
 };
 
 export const usersTable = sqliteTable("users", {
@@ -37,6 +57,18 @@ export const chatThreadsTable = sqliteTable("chat_threads", {
   marketState: text("market_state", { mode: "json" })
     .$type<MarketState | null>()
     .default(sql`NULL`),
+  createdAt: int("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: int("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+export const reactThreadsTable = sqliteTable("react_threads", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  state: text("state", { mode: "json" }).$type<ReactThreadState>().notNull(),
   createdAt: int("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),

@@ -9,12 +9,12 @@ const LEGACY_EXTENDED_PREDICTION =
 
 const ImmediateBarAnalysisSchema = z.object({
   mode: z.enum(["initial_analysis", "followup_analysis"]),
-  recentMove: z.string(),
+  // recentMove: z.string(),
   corroborationWithPreviousPrediction: z.string().nullable(),
   alBrooksContext: z.string(),
   prediction: z.string(),
   invalidation: z.string(),
-  conciseForecast: z.string(),
+  // conciseForecast: z.string(),
 });
 
 const ExtendedPredictionSchema = z.object({
@@ -32,7 +32,7 @@ const LegacyBarAnalysisSchema = ImmediateBarAnalysisSchema.extend({
   extendedPrediction: z.string().trim().min(1).optional(),
 }).passthrough();
 
-const predictionMemorySchema = z
+export const predictionMemorySchema = z
   .object({
     immediatePredictions: z.array(z.string().trim().min(1)).default([]),
     extendedPredictions: z.array(z.string().trim().min(1)).default([]),
@@ -55,7 +55,7 @@ const legacyPriceActionMemorySchema = z
   })
   .strict();
 
-const priceActionMemoryInputSchema = z
+export const priceActionMemoryInputSchema = z
   .union([predictionMemorySchema, legacyPriceActionMemorySchema])
   .optional();
 
@@ -96,8 +96,8 @@ const AgentState = Annotation.Root({
 export type PriceActionAgentState = typeof AgentState.State;
 
 const model = new ChatOpenAI({
-  model: "gpt-5.4-mini",
-  temperature: 0.2,
+  model: "gpt-5.4",
+  temperature: 0,
 });
 const DEFAULT_LANGSMITH_PROJECT = "playbook-chat";
 const BASE_TRACE_TAGS = [
@@ -160,6 +160,7 @@ async function analyzeChart(state: typeof AgentState.State) {
 
   const task = isFirstImage
     ? `
+You are a professional techinical analyst, specialist in price action.
 You are analyzing the FIRST chart image.
 
 No prior immediate predictions exist. Set corroborationWithPreviousPrediction to null.
@@ -171,6 +172,7 @@ Task:
 4. Be probabilistic, not certain.
 `
     : `
+You are a professional techinical analyst, specialist in price action.
 You are analyzing a FOLLOW-UP chart image with new bars.
 
 Prior immediate predictions:
@@ -180,20 +182,19 @@ Latest immediate prediction:
 ${latestImmediatePrediction}
 
 Task:
-1. Analyze what the last 3 bars show.
+1. Analyze what the new bars show.
 2. Use the full prior immediate prediction series only as immediate-horizon memory.
 3. Notice whether immediate expectations have drifted or repeatedly failed/succeeded.
-4. For corroborationWithPreviousPrediction, focus mainly on whether the newest chart evidence corroborates, weakens, contradicts, or leaves unclear the latest immediate prediction.
-5. Do not evaluate extended predictions in this node.
-6. Update the Al Brooks Price Action context.
-7. Make a new immediate prediction for the next bars.
+4. For corroborationWithPreviousPrediction, focus mainly on whether the newest chart evidence corroborates, weakens, contradicts, or leaves unclear the latest immediate prediction, but make sure to detect if theres a bulish or bearish trend in corroborations.
+5. Update the Al Brooks Price Action context.
+6. Make a new immediate prediction for the next bars.
 `;
 
   const response = await immediateAnalysisModel.invoke([
     {
       role: "system",
       content: `
-You are an Al Brooks Price Action trading assistant.
+You are an Al Brooks Price Action trading analyst.
 
 Focus on:
 - last active move
@@ -218,7 +219,6 @@ Focus on:
 - microchannel 
 - wedge
 
-Do not give financial advice or trade instructions.
 Return structured analysis only.
 `,
     },
@@ -373,10 +373,10 @@ Return structured analysis only.
 
 const graph = new StateGraph(AgentState)
   .addNode("analyzeChart", analyzeChart)
-  .addNode("createExtendedPrediction", createExtendedPrediction)
+  // .addNode("createExtendedPrediction", createExtendedPrediction)
   .addEdge(START, "analyzeChart")
-  .addEdge("analyzeChart", "createExtendedPrediction")
-  .addEdge("createExtendedPrediction", END)
+  .addEdge("analyzeChart", END)
+  // .addEdge("createExtendedPrediction", END)
   .compile();
 
 function normalizeLegacyAnalysis(

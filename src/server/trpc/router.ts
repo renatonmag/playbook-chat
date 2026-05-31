@@ -2,8 +2,9 @@ import { TRPCError } from "@trpc/server";
 import { desc } from "drizzle-orm";
 import { z } from "zod";
 import {
-  barAnalysisSchema,
   chartRenderRequestSchema,
+  predictionMemorySchema,
+  priceActionMemoryInputSchema,
   runPriceActionAgent,
   runTradingAgent,
   streamTradingAgent,
@@ -22,6 +23,13 @@ import {
   updateThread,
 } from "~/server/chat-store";
 import {
+  createReactThread,
+  deleteReactThread,
+  getReactThreadById,
+  getReactThreads,
+  updateReactThread,
+} from "~/server/react-thread-store";
+import {
   EmptyMarketDataRangeError,
   getWinM5CandlesInRange,
   getWinM5Last100Candles,
@@ -36,37 +44,9 @@ const chatInputSchema = z.object({
   message: z.string().trim().min(1),
 });
 
-const legacyBarAnalysisSchema = barAnalysisSchema.extend({
-}).passthrough();
-
-const predictionMemorySchema = z
-  .object({
-    immediatePredictions: z.array(z.string().trim().min(1)).default([]),
-    extendedPredictions: z.array(z.string().trim().min(1)).default([]),
-  })
-  .strict()
-  .refine(
-    (memory) =>
-      memory.immediatePredictions.length === memory.extendedPredictions.length,
-    {
-      message:
-        "immediatePredictions and extendedPredictions must have the same length.",
-    },
-  );
-
-const legacyPriceActionMemorySchema = z.object({
-  previousPrediction: z.string().nullable().optional(),
-  previousAnalysis: legacyBarAnalysisSchema.nullable().optional(),
-  history: z.array(legacyBarAnalysisSchema).optional(),
-}).strict();
-
-const priceActionMemorySchema = z.union([
-  predictionMemorySchema,
-  legacyPriceActionMemorySchema,
-]);
-
 const reactAnalyzeChartInputSchema = chartRenderRequestSchema.extend({
-  previousState: priceActionMemorySchema.optional(),
+  threadId: z.string().uuid().optional(),
+  previousState: priceActionMemoryInputSchema,
 });
 
 const chatResponseSchema = z.object({
@@ -334,11 +314,52 @@ export const appRouter = router({
       }),
   }),
   react: router({
+    threads: router({
+      list: publicProcedure.query(() => getReactThreads()),
+      byId: publicProcedure
+        .input(
+          z.object({
+            id: z.string().uuid(),
+          }),
+        )
+        .query(async ({ input }) => {
+          const thread = await getReactThreadById(input.id);
+
+          if (!thread) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "React thread not found.",
+            });
+          }
+
+          return thread;
+        }),
+      delete: publicProcedure
+        .input(
+          z.object({
+            id: z.string().uuid(),
+          }),
+        )
+        .mutation(({ input }) => deleteReactThread(input.id)),
+    }),
     analyzeChart: publicProcedure
       .input(reactAnalyzeChartInputSchema)
       .mutation(async ({ input }) => {
-        const { previousState, ...renderRequest } = input;
-        const state = await runPriceActionAgent(renderRequest, previousState);
+        const { previousState, threadId, ...renderRequest } = input;
+        const existingThread = threadId
+          ? await getReactThreadById(threadId)
+          : null;
+
+        if (threadId && !existingThread) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "React thread not found.",
+          });
+        }
+
+        const memory =
+          previousState ?? existingThread?.state.previousState ?? undefined;
+        const state = await runPriceActionAgent(renderRequest, memory);
 
         if (!state.result) {
           throw new TRPCError({
@@ -347,12 +368,34 @@ export const appRouter = router({
           });
         }
 
+        const updatedPreviousState = predictionMemorySchema.parse({
+          immediatePredictions: state.immediatePredictions,
+          extendedPredictions: state.extendedPredictions,
+        });
+        const updatedThreadState = {
+          lastCandleTime: renderRequest.lastCandleTime,
+          candleCount: renderRequest.candleCount,
+          symbol: renderRequest.symbol,
+          timeframe: renderRequest.timeframe,
+          previousState: updatedPreviousState,
+          analysisHistory: [
+            ...(existingThread?.state.analysisHistory ?? []),
+            {
+              candleTime: renderRequest.lastCandleTime,
+              chartRequest: renderRequest,
+              analysis: state.result,
+            },
+          ],
+        };
+        const thread = existingThread
+          ? await updateReactThread(existingThread.id, updatedThreadState)
+          : await createReactThread(updatedThreadState);
+
         return {
+          threadId: thread.id,
+          thread,
           analysis: state.result,
-          previousState: {
-            immediatePredictions: state.immediatePredictions,
-            extendedPredictions: state.extendedPredictions,
-          },
+          previousState: updatedPreviousState,
         };
       }),
   }),
