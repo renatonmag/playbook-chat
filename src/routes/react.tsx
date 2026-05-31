@@ -8,15 +8,15 @@ type BarAnalysis = {
   corroborationWithPreviousPrediction: string | null;
   alBrooksContext: string;
   prediction: string;
-  longerTermPrediction: string;
+  extendedPredictionReview: string | null;
+  extendedPrediction: string;
   invalidation: string;
   conciseForecast: string;
 };
 
 type PriceActionMemory = {
-  previousPrediction?: string | null;
-  previousAnalysis?: BarAnalysis | null;
-  history?: BarAnalysis[];
+  immediatePredictions: string[];
+  extendedPredictions: string[];
 };
 
 const INITIAL_LAST_CANDLE_TIME = "2026-05-22T09:05:00Z";
@@ -56,8 +56,11 @@ export default function ReactChat() {
   const [symbol, setSymbol] = createSignal(DEFAULT_SYMBOL);
   const [timeframe, setTimeframe] = createSignal(DEFAULT_TIMEFRAME);
   const [analysis, setAnalysis] = createSignal<BarAnalysis>();
-  const [previousState, setPreviousState] = createSignal<PriceActionMemory>();
-  const [history, setHistory] = createSignal<BarAnalysis[]>([]);
+  const [previousState, setPreviousState] = createSignal<PriceActionMemory>({
+    immediatePredictions: [],
+    extendedPredictions: [],
+  });
+  const [analysisHistory, setAnalysisHistory] = createSignal<BarAnalysis[]>([]);
   const [isAnalyzing, setIsAnalyzing] = createSignal(false);
   const [error, setError] = createSignal("");
   const formattedCandleTime = createMemo(() => {
@@ -90,7 +93,7 @@ export default function ReactChat() {
       setLastCandleTime(nextTime);
       setAnalysis(result.analysis);
       setPreviousState(result.previousState);
-      setHistory(result.previousState.history ?? [result.analysis]);
+      setAnalysisHistory((items) => [...items, result.analysis]);
     } catch (analyzeError) {
       if (import.meta.env.DEV) {
         console.error("Could not analyze chart.", analyzeError);
@@ -118,8 +121,11 @@ export default function ReactChat() {
     setSymbol(DEFAULT_SYMBOL);
     setTimeframe(DEFAULT_TIMEFRAME);
     setAnalysis(undefined);
-    setPreviousState(undefined);
-    setHistory([]);
+    setPreviousState({
+      immediatePredictions: [],
+      extendedPredictions: [],
+    });
+    setAnalysisHistory([]);
     setError("");
   }
 
@@ -298,8 +304,12 @@ export default function ReactChat() {
                   value={currentAnalysis().prediction}
                 />
                 <AnalysisSection
-                  label="Longer-Term Prediction"
-                  value={currentAnalysis().longerTermPrediction}
+                  label="Extended Prediction"
+                  value={currentAnalysis().extendedPrediction}
+                />
+                <AnalysisSection
+                  label="Extended Prediction Review"
+                  value={currentAnalysis().extendedPredictionReview}
                 />
                 <AnalysisSection
                   label="Invalidation"
@@ -313,13 +323,13 @@ export default function ReactChat() {
             )}
           </Show>
 
-          <Show when={history().length > 0}>
+          <Show when={analysisHistory().length > 0}>
             <section class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <h2 class="text-sm font-semibold text-slate-950">
                 Analysis History
               </h2>
               <div class="mt-3 space-y-2">
-                <For each={history()}>
+                <For each={analysisHistory()}>
                   {(item, index) => (
                     <article class="rounded-md border border-slate-200 bg-slate-50 p-3">
                       <div class="flex items-center justify-between gap-3">

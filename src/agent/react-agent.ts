@@ -4,8 +4,8 @@ import { ChatOpenAI } from "@langchain/openai";
 import { traceable } from "langsmith/traceable";
 import { z } from "zod";
 
-const LEGACY_LONGER_TERM_PREDICTION =
-  "No longer-term prediction was stored for this earlier response.";
+const LEGACY_EXTENDED_PREDICTION =
+  "No extended prediction was stored for this earlier response.";
 
 const ImmediateBarAnalysisSchema = z.object({
   mode: z.enum(["initial_analysis", "followup_analysis"]),
@@ -17,24 +17,46 @@ const ImmediateBarAnalysisSchema = z.object({
   conciseForecast: z.string(),
 });
 
-const LongerTermPredictionSchema = z.object({
-  longerTermPrediction: z.string().trim().min(1),
+const ExtendedPredictionSchema = z.object({
+  extendedPredictionReview: z.string().trim().min(1).nullable(),
+  extendedPrediction: z.string().trim().min(1),
 });
 
 const BarAnalysisSchema = ImmediateBarAnalysisSchema.extend({
-  longerTermPrediction: z.string().trim().min(1),
+  extendedPredictionReview: z.string().trim().min(1).nullable(),
+  extendedPrediction: z.string().trim().min(1),
 });
 
 const LegacyBarAnalysisSchema = ImmediateBarAnalysisSchema.extend({
-  longerTermPrediction: z.string().trim().min(1).optional(),
-});
+  extendedPredictionReview: z.string().trim().min(1).nullable().optional(),
+  extendedPrediction: z.string().trim().min(1).optional(),
+}).passthrough();
 
-const priceActionMemoryInputSchema = z
+const predictionMemorySchema = z
+  .object({
+    immediatePredictions: z.array(z.string().trim().min(1)).default([]),
+    extendedPredictions: z.array(z.string().trim().min(1)).default([]),
+  })
+  .strict()
+  .refine(
+    (memory) =>
+      memory.immediatePredictions.length === memory.extendedPredictions.length,
+    {
+      message:
+        "immediatePredictions and extendedPredictions must have the same length.",
+    },
+  );
+
+const legacyPriceActionMemorySchema = z
   .object({
     previousPrediction: z.string().nullable().optional(),
     previousAnalysis: LegacyBarAnalysisSchema.nullable().optional(),
     history: z.array(LegacyBarAnalysisSchema).optional(),
   })
+  .strict();
+
+const priceActionMemoryInputSchema = z
+  .union([predictionMemorySchema, legacyPriceActionMemorySchema])
   .optional();
 
 export const barAnalysisSchema = BarAnalysisSchema;
@@ -49,19 +71,16 @@ export const chartRenderRequestSchema = z.object({
 export type BarAnalysis = z.infer<typeof BarAnalysisSchema>;
 type ImmediateBarAnalysis = z.infer<typeof ImmediateBarAnalysisSchema>;
 export type ChartRenderRequest = z.infer<typeof chartRenderRequestSchema>;
+export type PriceActionAgentMemory = z.infer<typeof predictionMemorySchema>;
 
 const AgentState = Annotation.Root({
   imageDataUrl: Annotation<string>(),
-  previousPrediction: Annotation<string | null>({
+  immediatePredictions: Annotation<string[]>({
     reducer: (_left, right) => right,
-    default: () => null,
+    default: () => [],
   }),
-  previousAnalysis: Annotation<BarAnalysis | null>({
+  extendedPredictions: Annotation<string[]>({
     reducer: (_left, right) => right,
-    default: () => null,
-  }),
-  history: Annotation<BarAnalysis[]>({
-    reducer: (left, right) => left.concat(right),
     default: () => [],
   }),
   currentAnalysis: Annotation<ImmediateBarAnalysis | null>({
@@ -75,10 +94,6 @@ const AgentState = Annotation.Root({
 });
 
 export type PriceActionAgentState = typeof AgentState.State;
-export type PriceActionAgentMemory = Pick<
-  PriceActionAgentState,
-  "previousPrediction" | "previousAnalysis" | "history"
->;
 
 const model = new ChatOpenAI({
   model: "gpt-5.4-mini",
@@ -94,8 +109,8 @@ const BASE_TRACE_TAGS = [
 const immediateAnalysisModel = model.withStructuredOutput(
   ImmediateBarAnalysisSchema,
 );
-const longerTermPredictionModel = model.withStructuredOutput(
-  LongerTermPredictionSchema,
+const extendedPredictionModel = model.withStructuredOutput(
+  ExtendedPredictionSchema,
 );
 
 function getLangSmithProjectName() {
@@ -138,11 +153,16 @@ async function renderChartToDataUrl(input: ChartRenderRequest) {
 }
 
 async function analyzeChart(state: typeof AgentState.State) {
-  const isFirstImage = !state.previousPrediction;
+  const latestImmediatePrediction = getLatestPrediction(
+    state.immediatePredictions,
+  );
+  const isFirstImage = !latestImmediatePrediction;
 
   const task = isFirstImage
     ? `
 You are analyzing the FIRST chart image.
+
+No prior immediate predictions exist. Set corroborationWithPreviousPrediction to null.
 
 Task:
 1. Identify the recent active move.
@@ -153,15 +173,21 @@ Task:
     : `
 You are analyzing a FOLLOW-UP chart image with new bars.
 
-Previous prediction:
-${state.previousPrediction}
+Prior immediate predictions:
+${formatPredictionSeries(state.immediatePredictions)}
+
+Latest immediate prediction:
+${latestImmediatePrediction}
 
 Task:
-1. Analyze what the newest bars show.
-2. Explain what in the current image corroborates or contradicts the previous prediction.
-3. Update the Al Brooks Price Action context.
-4. Make a new prediction for the next bars.
-5. Be probabilistic, not certain.
+1. Analyze what the last 3 bars show.
+2. Use the full prior immediate prediction series only as immediate-horizon memory.
+3. Notice whether immediate expectations have drifted or repeatedly failed/succeeded.
+4. For corroborationWithPreviousPrediction, focus mainly on whether the newest chart evidence corroborates, weakens, contradicts, or leaves unclear the latest immediate prediction.
+5. Do not evaluate extended predictions in this node.
+6. Update the Al Brooks Price Action context.
+7. Make a new immediate prediction for the next bars.
+8. Be probabilistic, not certain.
 `;
 
   const response = await immediateAnalysisModel.invoke([
@@ -219,33 +245,65 @@ Return structured analysis only.
   };
 }
 
-function formatPreviousResponses(history: BarAnalysis[]) {
-  if (history.length === 0) {
+function formatPredictionSeries(predictions: string[]) {
+  if (predictions.length === 0) {
     return "None.";
   }
 
-  return history
-    .map(
-      (item, index) => `
-Response ${index + 1}:
-- mode: ${item.mode}
-- recent move: ${item.recentMove}
-- immediate prediction: ${item.prediction}
-- longer-term prediction: ${item.longerTermPrediction}
-- invalidation: ${item.invalidation}
-- concise forecast: ${item.conciseForecast}`,
-    )
+  return predictions
+    .map((prediction, index) => `${index + 1}. ${prediction}`)
     .join("\n");
 }
 
-async function createLongerTermPrediction(state: typeof AgentState.State) {
+function getLatestPrediction(predictions: string[]) {
+  return predictions.at(-1) ?? null;
+}
+
+function getLegacyStringField(
+  value: z.infer<typeof LegacyBarAnalysisSchema>,
+  parts: string[],
+) {
+  const field = (value as Record<string, unknown>)[parts.join("")];
+
+  return typeof field === "string" && field.trim().length > 0 ? field : null;
+}
+
+async function createExtendedPrediction(state: typeof AgentState.State) {
   if (!state.currentAnalysis) {
     throw new Error(
-      "Cannot create longer-term prediction without current analysis.",
+      "Cannot create extended prediction without current analysis.",
     );
   }
 
-  const response = await longerTermPredictionModel.invoke([
+  const latestExtendedPrediction = getLatestPrediction(
+    state.extendedPredictions,
+  );
+  const memoryTask = latestExtendedPrediction
+    ? `
+Prior extended predictions:
+${formatPredictionSeries(state.extendedPredictions)}
+
+Latest extended prediction:
+${latestExtendedPrediction}
+
+Task:
+1. Use only the prior extended prediction series as extended-horizon memory.
+2. Notice whether the extended-horizon thesis has drifted, improved, weakened, or repeatedly failed.
+3. For extendedPredictionReview, focus mainly on whether the newest chart evidence supports, weakens, contradicts, or leaves unclear the latest extended prediction.
+4. Do not evaluate immediate predictions in this node.
+5. Create a new extended/couple-moves prediction.
+6. Keep the new extended prediction to 2 phrases.
+`
+    : `
+No prior extended predictions exist. Set extendedPredictionReview to null.
+
+Task:
+1. Create a new extended/couple-moves prediction.
+2. Use the last active move and current chart evidence.
+3. Keep the new extended prediction to 2 phrases.
+`;
+
+  const response = await extendedPredictionModel.invoke([
     {
       role: "system",
       content: `
@@ -283,11 +341,7 @@ Return structured analysis only.
       content: [
         {
           type: "text",
-          text: `
-          If you have to make a prediction, not for the immediate next bar, but for longer, couple moves.
-          Use the last active move, be smart about it.
-          Keep in 2 phrases.
-          `,
+          text: memoryTask,
         },
         {
           type: "image_url",
@@ -301,32 +355,50 @@ Return structured analysis only.
 
   const finalAnalysis = {
     ...state.currentAnalysis,
-    longerTermPrediction: response.longerTermPrediction,
+    extendedPredictionReview: response.extendedPredictionReview,
+    extendedPrediction: response.extendedPrediction,
   };
 
   return {
     result: finalAnalysis,
-    previousPrediction: finalAnalysis.prediction,
-    previousAnalysis: finalAnalysis,
-    history: [finalAnalysis],
+    immediatePredictions: [
+      ...state.immediatePredictions,
+      finalAnalysis.prediction,
+    ],
+    extendedPredictions: [
+      ...state.extendedPredictions,
+      finalAnalysis.extendedPrediction,
+    ],
   };
 }
 
 const graph = new StateGraph(AgentState)
   .addNode("analyzeChart", analyzeChart)
-  .addNode("createLongerTermPrediction", createLongerTermPrediction)
+  .addNode("createExtendedPrediction", createExtendedPrediction)
   .addEdge(START, "analyzeChart")
-  .addEdge("analyzeChart", "createLongerTermPrediction")
-  .addEdge("createLongerTermPrediction", END)
+  .addEdge("analyzeChart", "createExtendedPrediction")
+  .addEdge("createExtendedPrediction", END)
   .compile();
 
 function normalizeLegacyAnalysis(
   analysis: z.infer<typeof LegacyBarAnalysisSchema>,
 ): BarAnalysis {
+  const legacyReview = getLegacyStringField(analysis, [
+    "long",
+    "Prediction",
+    "Review",
+  ]);
+  const legacyPrediction = getLegacyStringField(analysis, [
+    "longer",
+    "Term",
+    "Prediction",
+  ]);
+
   return {
     ...analysis,
-    longerTermPrediction:
-      analysis.longerTermPrediction ?? LEGACY_LONGER_TERM_PREDICTION,
+    extendedPredictionReview: analysis.extendedPredictionReview ?? legacyReview,
+    extendedPrediction:
+      analysis.extendedPrediction ?? legacyPrediction ?? LEGACY_EXTENDED_PREDICTION,
   };
 }
 
@@ -335,12 +407,52 @@ function normalizePreviousState(
 ): PriceActionAgentMemory {
   const parsedState = priceActionMemoryInputSchema.parse(previousState);
 
+  if (!parsedState) {
+    return {
+      immediatePredictions: [],
+      extendedPredictions: [],
+    };
+  }
+
+  if (
+    "immediatePredictions" in parsedState ||
+    "extendedPredictions" in parsedState
+  ) {
+    return predictionMemorySchema.parse(parsedState);
+  }
+
+  if (parsedState.history?.length) {
+    const history = parsedState.history.map(normalizeLegacyAnalysis);
+
+    return {
+      immediatePredictions: history.map((analysis) => analysis.prediction),
+      extendedPredictions: history.map(
+        (analysis) => analysis.extendedPrediction,
+      ),
+    };
+  }
+
+  if (parsedState.previousAnalysis) {
+    const previousAnalysis = normalizeLegacyAnalysis(
+      parsedState.previousAnalysis,
+    );
+
+    return {
+      immediatePredictions: [previousAnalysis.prediction],
+      extendedPredictions: [previousAnalysis.extendedPrediction],
+    };
+  }
+
+  if (parsedState.previousPrediction) {
+    return {
+      immediatePredictions: [parsedState.previousPrediction],
+      extendedPredictions: [LEGACY_EXTENDED_PREDICTION],
+    };
+  }
+
   return {
-    previousPrediction: parsedState?.previousPrediction ?? null,
-    previousAnalysis: parsedState?.previousAnalysis
-      ? normalizeLegacyAnalysis(parsedState.previousAnalysis)
-      : null,
-    history: (parsedState?.history ?? []).map(normalizeLegacyAnalysis),
+    immediatePredictions: [],
+    extendedPredictions: [],
   };
 }
 
@@ -354,9 +466,8 @@ async function runPriceActionAgentImpl(
 
   const result = await graph.invoke({
     imageDataUrl,
-    previousPrediction: normalizedPreviousState.previousPrediction,
-    previousAnalysis: normalizedPreviousState.previousAnalysis,
-    history: normalizedPreviousState.history,
+    immediatePredictions: normalizedPreviousState.immediatePredictions,
+    extendedPredictions: normalizedPreviousState.extendedPredictions,
     currentAnalysis: null,
     result: null,
   });

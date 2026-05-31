@@ -37,14 +37,33 @@ const chatInputSchema = z.object({
 });
 
 const legacyBarAnalysisSchema = barAnalysisSchema.extend({
-  longerTermPrediction: z.string().trim().min(1).optional(),
-});
+}).passthrough();
 
-const priceActionMemorySchema = z.object({
+const predictionMemorySchema = z
+  .object({
+    immediatePredictions: z.array(z.string().trim().min(1)).default([]),
+    extendedPredictions: z.array(z.string().trim().min(1)).default([]),
+  })
+  .strict()
+  .refine(
+    (memory) =>
+      memory.immediatePredictions.length === memory.extendedPredictions.length,
+    {
+      message:
+        "immediatePredictions and extendedPredictions must have the same length.",
+    },
+  );
+
+const legacyPriceActionMemorySchema = z.object({
   previousPrediction: z.string().nullable().optional(),
   previousAnalysis: legacyBarAnalysisSchema.nullable().optional(),
   history: z.array(legacyBarAnalysisSchema).optional(),
-});
+}).strict();
+
+const priceActionMemorySchema = z.union([
+  predictionMemorySchema,
+  legacyPriceActionMemorySchema,
+]);
 
 const reactAnalyzeChartInputSchema = chartRenderRequestSchema.extend({
   previousState: priceActionMemorySchema.optional(),
@@ -331,9 +350,8 @@ export const appRouter = router({
         return {
           analysis: state.result,
           previousState: {
-            previousPrediction: state.previousPrediction,
-            previousAnalysis: state.previousAnalysis,
-            history: state.history,
+            immediatePredictions: state.immediatePredictions,
+            extendedPredictions: state.extendedPredictions,
           },
         };
       }),
