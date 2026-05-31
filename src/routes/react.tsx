@@ -11,19 +11,14 @@ import { getTRPCClient } from "~/lib/trpc/client";
 
 type BarAnalysis = {
   mode: "initial_analysis" | "followup_analysis";
-  recentMove: string;
   corroborationWithPreviousPrediction: string | null;
   alBrooksContext: string;
   prediction: string;
-  extendedPredictionReview: string | null;
-  extendedPrediction: string;
   invalidation: string;
-  conciseForecast: string;
 };
 
 type PriceActionMemory = {
   immediatePredictions: string[];
-  extendedPredictions: string[];
 };
 
 type ChartRenderRequest = {
@@ -119,7 +114,6 @@ export default function ReactChat() {
   const [analysis, setAnalysis] = createSignal<BarAnalysis>();
   const [previousState, setPreviousState] = createSignal<PriceActionMemory>({
     immediatePredictions: [],
-    extendedPredictions: [],
   });
   const [analysisHistory, setAnalysisHistory] = createSignal<
     ReactAnalysisHistoryItem[]
@@ -306,7 +300,6 @@ export default function ReactChat() {
     setAnalysis(undefined);
     setPreviousState({
       immediatePredictions: [],
-      extendedPredictions: [],
     });
     setAnalysisHistory([]);
     setSelectedAnalysisIndex(null);
@@ -558,28 +551,12 @@ export default function ReactChat() {
                 </section>
 
                 <AnalysisSection
-                  label="Concise Forecast"
-                  value={currentAnalysis().conciseForecast}
-                />
-                <AnalysisSection
-                  label="Recent Move"
-                  value={currentAnalysis().recentMove}
-                />
-                <AnalysisSection
                   label="Al Brooks Context"
                   value={currentAnalysis().alBrooksContext}
                 />
                 <AnalysisSection
                   label="Prediction"
                   value={currentAnalysis().prediction}
-                />
-                <AnalysisSection
-                  label="Extended Prediction"
-                  value={currentAnalysis().extendedPrediction}
-                />
-                <AnalysisSection
-                  label="Extended Prediction Review"
-                  value={currentAnalysis().extendedPredictionReview}
                 />
                 <AnalysisSection
                   label="Invalidation"
@@ -635,7 +612,7 @@ export default function ReactChat() {
                         {item.candleTime}
                       </p>
                       <p class="mt-2 text-sm leading-5 text-slate-700">
-                        {item.analysis.conciseForecast}
+                        {item.analysis.prediction}
                       </p>
                     </button>
                   )}

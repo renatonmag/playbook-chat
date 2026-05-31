@@ -370,7 +370,6 @@ export const appRouter = router({
 
         const updatedPreviousState = predictionMemorySchema.parse({
           immediatePredictions: state.immediatePredictions,
-          extendedPredictions: state.extendedPredictions,
         });
         const updatedThreadState = {
           lastCandleTime: renderRequest.lastCandleTime,
