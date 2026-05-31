@@ -187,7 +187,6 @@ Task:
 5. Do not evaluate extended predictions in this node.
 6. Update the Al Brooks Price Action context.
 7. Make a new immediate prediction for the next bars.
-8. Be probabilistic, not certain.
 `;
 
   const response = await immediateAnalysisModel.invoke([
@@ -398,7 +397,9 @@ function normalizeLegacyAnalysis(
     ...analysis,
     extendedPredictionReview: analysis.extendedPredictionReview ?? legacyReview,
     extendedPrediction:
-      analysis.extendedPrediction ?? legacyPrediction ?? LEGACY_EXTENDED_PREDICTION,
+      analysis.extendedPrediction ??
+      legacyPrediction ??
+      LEGACY_EXTENDED_PREDICTION,
   };
 }
 
