@@ -32,7 +32,7 @@ import {
 import {
   EmptyMarketDataRangeError,
   getWinM5CandlesInRange,
-  getWinM5Last100Candles,
+  getWinM5LastCandles,
   InvalidMarketDataRangeError,
   marketDataRangeResponseSchema,
   marketDataResponseSchema,
@@ -130,7 +130,7 @@ export const appRouter = router({
       .output(marketDataResponseSchema)
       .query(async () => {
         try {
-          return await getWinM5Last100Candles();
+          return await getWinM5LastCandles();
         } catch (error) {
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
@@ -206,112 +206,110 @@ export const appRouter = router({
       .input(chatInputSchema)
       .output(chatResponseSchema)
       .mutation(({ input }) => sendChatMessage(input)),
-    stream: publicProcedure
-      .input(chatInputSchema)
-      .mutation(async function* ({ input, signal }) {
-        const thread = await resolveChatThread(input.threadId);
-        const userMessage = createMessage("user", input.message);
-        const messagesWithUser: ChatMessage[] = [
-          ...thread.messages,
-          userMessage,
-        ];
-        const userThread = await updateThread(thread.id, messagesWithUser);
-        const freeformAssistantMessageId = crypto.randomUUID();
-        const reportAssistantMessageId = crypto.randomUUID();
-        const assistantMetadata = {
-          agentState: "analysis_ready" as const,
-          responseStyle: "freeform" as const,
-        };
-        let assistantStarted = false;
+    stream: publicProcedure.input(chatInputSchema).mutation(async function* ({
+      input,
+      signal,
+    }) {
+      const thread = await resolveChatThread(input.threadId);
+      const userMessage = createMessage("user", input.message);
+      const messagesWithUser: ChatMessage[] = [...thread.messages, userMessage];
+      const userThread = await updateThread(thread.id, messagesWithUser);
+      const freeformAssistantMessageId = crypto.randomUUID();
+      const reportAssistantMessageId = crypto.randomUUID();
+      const assistantMetadata = {
+        agentState: "analysis_ready" as const,
+        responseStyle: "freeform" as const,
+      };
+      let assistantStarted = false;
 
-        yield {
-          type: "thread" as const,
-          threadId: userThread.id,
-          userMessage,
-        };
+      yield {
+        type: "thread" as const,
+        threadId: userThread.id,
+        userMessage,
+      };
 
-        const agentStream = streamTradingAgent(
-          {
-            prompt: input.message,
-            history: thread.messages,
-            previousMarketState: thread.marketState ?? null,
-          },
-          signal,
-        );
+      const agentStream = streamTradingAgent(
+        {
+          prompt: input.message,
+          history: thread.messages,
+          previousMarketState: thread.marketState ?? null,
+        },
+        signal,
+      );
 
-        let next = await agentStream.next();
+      let next = await agentStream.next();
 
-        while (!next.done) {
-          if (next.value.type === "text_delta") {
-            if (!assistantStarted) {
-              assistantStarted = true;
-
-              yield {
-                type: "assistant_start" as const,
-                messageId: freeformAssistantMessageId,
-                metadata: assistantMetadata,
-              };
-            }
+      while (!next.done) {
+        if (next.value.type === "text_delta") {
+          if (!assistantStarted) {
+            assistantStarted = true;
 
             yield {
-              type: "assistant_delta" as const,
+              type: "assistant_start" as const,
               messageId: freeformAssistantMessageId,
-              delta: next.value.delta,
+              metadata: assistantMetadata,
             };
-          } else {
-            yield next.value;
           }
 
-          next = await agentStream.next();
+          yield {
+            type: "assistant_delta" as const,
+            messageId: freeformAssistantMessageId,
+            delta: next.value.delta,
+          };
+        } else {
+          yield next.value;
         }
 
-        const result = next.value;
-        const finalFreeformMetadata = {
-          agentState: result.state,
-          responseStyle: "freeform" as const,
-        };
-        const reportMetadata = {
-          agentState: result.state,
-          responseStyle: "report" as const,
-        };
-        const freeformMessage: ChatMessage = {
-          id: freeformAssistantMessageId,
-          role: "assistant",
-          content: result.freeform,
+        next = await agentStream.next();
+      }
+
+      const result = next.value;
+      const finalFreeformMetadata = {
+        agentState: result.state,
+        responseStyle: "freeform" as const,
+      };
+      const reportMetadata = {
+        agentState: result.state,
+        responseStyle: "report" as const,
+      };
+      const freeformMessage: ChatMessage = {
+        id: freeformAssistantMessageId,
+        role: "assistant",
+        content: result.freeform,
+        metadata: finalFreeformMetadata,
+      };
+      const reportMessage: ChatMessage = {
+        id: reportAssistantMessageId,
+        role: "assistant",
+        content: result.report,
+        metadata: reportMetadata,
+      };
+      const finalMessages = [
+        ...messagesWithUser,
+        freeformMessage,
+        reportMessage,
+      ];
+      const updatedThread = await updateThread(userThread.id, finalMessages, {
+        marketState: result.marketState,
+      });
+
+      if (!assistantStarted) {
+        yield {
+          type: "assistant_start" as const,
+          messageId: freeformAssistantMessageId,
           metadata: finalFreeformMetadata,
         };
-        const reportMessage: ChatMessage = {
-          id: reportAssistantMessageId,
-          role: "assistant",
-          content: result.report,
-          metadata: reportMetadata,
-        };
-        const finalMessages = [
-          ...messagesWithUser,
-          freeformMessage,
-          reportMessage,
-        ];
-        const updatedThread = await updateThread(userThread.id, finalMessages, {
-          marketState: result.marketState,
-        });
+      }
 
-        if (!assistantStarted) {
-          yield {
-            type: "assistant_start" as const,
-            messageId: freeformAssistantMessageId,
-            metadata: finalFreeformMetadata,
-          };
-        }
-
-        yield {
-          type: "complete" as const,
-          threadId: updatedThread.id,
-          messages: updatedThread.messages,
-          message: result.freeform,
-          report: result.report,
-          state: result.state,
-        };
-      }),
+      yield {
+        type: "complete" as const,
+        threadId: updatedThread.id,
+        messages: updatedThread.messages,
+        message: result.freeform,
+        report: result.report,
+        state: result.state,
+      };
+    }),
   }),
   react: router({
     threads: router({

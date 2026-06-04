@@ -1,12 +1,11 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
+import { getSupabaseClient } from "./supabase";
 
-const WIN_M5_CSV_PATH = path.join(
-  process.cwd(),
-  "data",
-  "WIN@N_M5_202210171545_202605221830.csv",
-);
+const SYMBOL = "WIN@N";
+const TIMEFRAME = "M5";
+const LAST_CANDLE_COUNT = 100;
+const QUERY_PAGE_SIZE = 1_000;
+const CANDLE_COLUMNS = "time, open, high, low, close";
 
 const candleSchema = z.object({
   time: z.number().int().positive(),
@@ -16,18 +15,26 @@ const candleSchema = z.object({
   close: z.number().finite(),
 });
 
+const marketCandleRowSchema = z.object({
+  time: z.string().min(1),
+  open: z.number().finite(),
+  high: z.number().finite(),
+  low: z.number().finite(),
+  close: z.number().finite(),
+});
+
 export type MarketDataCandle = z.infer<typeof candleSchema>;
 
 export const marketDataResponseSchema = z.object({
-  symbol: z.literal("WIN@N"),
-  timeframe: z.literal("M5"),
-  count: z.literal(100),
-  candles: z.array(candleSchema).length(100),
+  symbol: z.literal(SYMBOL),
+  timeframe: z.literal(TIMEFRAME),
+  count: z.literal(LAST_CANDLE_COUNT),
+  candles: z.array(candleSchema).length(LAST_CANDLE_COUNT),
 });
 
 export const marketDataRangeResponseSchema = z.object({
-  symbol: z.literal("WIN@N"),
-  timeframe: z.literal("M5"),
+  symbol: z.literal(SYMBOL),
+  timeframe: z.literal(TIMEFRAME),
   startDate: z.string(),
   endDate: z.string(),
   count: z.number().int().nonnegative(),
@@ -60,94 +67,6 @@ export class MarketDataCandleNotFoundError extends Error {
   }
 }
 
-function parseCsvTimestamp(dateValue: string, timeValue: string) {
-  const dateParts = dateValue.split(".").map(Number);
-  const timeParts = timeValue.split(":").map(Number);
-
-  if (dateParts.length !== 3 || timeParts.length !== 3) {
-    throw new Error(`Invalid candle timestamp: ${dateValue} ${timeValue}`);
-  }
-
-  const [year, month, day] = dateParts;
-  const [hour, minute, second] = timeParts;
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    !Number.isInteger(hour) ||
-    !Number.isInteger(minute) ||
-    !Number.isInteger(second)
-  ) {
-    throw new Error(`Invalid candle timestamp: ${dateValue} ${timeValue}`);
-  }
-
-  const timestamp = Date.UTC(year, month - 1, day, hour, minute, second);
-  const normalizedDate = new Date(timestamp);
-
-  if (
-    normalizedDate.getUTCFullYear() !== year ||
-    normalizedDate.getUTCMonth() !== month - 1 ||
-    normalizedDate.getUTCDate() !== day ||
-    normalizedDate.getUTCHours() !== hour ||
-    normalizedDate.getUTCMinutes() !== minute ||
-    normalizedDate.getUTCSeconds() !== second
-  ) {
-    throw new Error(`Invalid candle timestamp: ${dateValue} ${timeValue}`);
-  }
-
-  return timestamp / 1000;
-}
-
-function parseNumber(value: string, label: string) {
-  const parsedValue = Number(value);
-
-  if (!Number.isFinite(parsedValue)) {
-    throw new Error(`Invalid ${label} value: ${value}`);
-  }
-
-  return parsedValue;
-}
-
-function parseCandleRow(row: string) {
-  const columns = row.split("\t");
-
-  if (columns.length !== 9) {
-    throw new Error(`Invalid candle row: ${row}`);
-  }
-
-  const [dateValue, timeValue, open, high, low, close] = columns;
-
-  return candleSchema.parse({
-    time: parseCsvTimestamp(dateValue, timeValue),
-    open: parseNumber(open, "open"),
-    high: parseNumber(high, "high"),
-    low: parseNumber(low, "low"),
-    close: parseNumber(close, "close"),
-  });
-}
-
-async function readWinM5Candles() {
-  const contents = await readFile(WIN_M5_CSV_PATH, "utf8");
-  const lines = contents
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean);
-  const rows = lines.slice(1);
-
-  return rows
-    .map(parseCandleRow)
-    .sort((left, right) => left.time - right.time);
-}
-
-let winM5CandlesPromise: Promise<MarketDataCandle[]> | undefined;
-
-export function loadWinM5Candles(): Promise<MarketDataCandle[]> {
-  winM5CandlesPromise ??= readWinM5Candles();
-
-  return winM5CandlesPromise;
-}
-
 function parseInputDate(value: string, label: string) {
   const timestamp = Date.parse(value);
 
@@ -158,19 +77,56 @@ function parseInputDate(value: string, label: string) {
   return timestamp;
 }
 
-export async function getWinM5Last100Candles(): Promise<MarketDataResponse> {
-  const candles = await loadWinM5Candles();
-  const lastCandles = candles.slice(-100);
+function toEpochSeconds(timestamp: number) {
+  return Math.floor(timestamp / 1000);
+}
 
-  if (lastCandles.length < 100) {
-    throw new Error("Expected at least 100 candle rows.");
+function toIsoSeconds(timestamp: number) {
+  return new Date(toEpochSeconds(timestamp) * 1000).toISOString();
+}
+
+function parseCandleRow(row: unknown): MarketDataCandle {
+  const parsedRow = marketCandleRowSchema.parse(row);
+  const timestamp = Date.parse(parsedRow.time);
+
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`Invalid market candle timestamp: ${parsedRow.time}`);
+  }
+
+  return candleSchema.parse({
+    ...parsedRow,
+    time: toEpochSeconds(timestamp),
+  });
+}
+
+function throwQueryError(context: string, error: { message: string }) {
+  throw new Error(`${context}: ${error.message}`);
+}
+
+export async function getWinM5LastCandles(): Promise<MarketDataResponse> {
+  const { data, error } = await getSupabaseClient()
+    .from("market_candles")
+    .select(CANDLE_COLUMNS)
+    .eq("symbol", SYMBOL)
+    .eq("timeframe", TIMEFRAME)
+    .order("time", { ascending: false })
+    .limit(LAST_CANDLE_COUNT);
+
+  if (error) {
+    throwQueryError("Could not query latest WIN@N M5 candles", error);
+  }
+
+  const candles = (data ?? []).map(parseCandleRow).reverse();
+
+  if (candles.length !== LAST_CANDLE_COUNT) {
+    throw new Error(`Expected at least ${LAST_CANDLE_COUNT} candle rows.`);
   }
 
   return marketDataResponseSchema.parse({
-    symbol: "WIN@N",
-    timeframe: "M5",
-    count: 100,
-    candles: lastCandles,
+    symbol: SYMBOL,
+    timeframe: TIMEFRAME,
+    count: LAST_CANDLE_COUNT,
+    candles,
   });
 }
 
@@ -187,13 +143,35 @@ export async function getWinM5CandlesInRange(input: {
     );
   }
 
-  const startTimestampSeconds = Math.floor(startTimestamp / 1000);
-  const endTimestampSeconds = Math.floor(endTimestamp / 1000);
-  const candles = await loadWinM5Candles();
-  const rangeCandles = candles.filter(
-    candle =>
-      candle.time >= startTimestampSeconds && candle.time <= endTimestampSeconds,
-  );
+  const rangeCandles: MarketDataCandle[] = [];
+  let totalCount: number | null = null;
+  let offset = 0;
+
+  while (totalCount === null || rangeCandles.length < totalCount) {
+    const { count, data, error } = await getSupabaseClient()
+      .from("market_candles")
+      .select(CANDLE_COLUMNS, { count: "exact" })
+      .eq("symbol", SYMBOL)
+      .eq("timeframe", TIMEFRAME)
+      .gte("time", toIsoSeconds(startTimestamp))
+      .lte("time", toIsoSeconds(endTimestamp))
+      .order("time", { ascending: true })
+      .range(offset, offset + QUERY_PAGE_SIZE - 1);
+
+    if (error) {
+      throwQueryError("Could not query WIN@N M5 candles in range", error);
+    }
+
+    const rows = data ?? [];
+    totalCount = count;
+    rangeCandles.push(...rows.map(parseCandleRow));
+
+    if (rows.length === 0) {
+      break;
+    }
+
+    offset += rows.length;
+  }
 
   if (rangeCandles.length === 0) {
     throw new EmptyMarketDataRangeError(
@@ -202,8 +180,8 @@ export async function getWinM5CandlesInRange(input: {
   }
 
   return marketDataRangeResponseSchema.parse({
-    symbol: "WIN@N",
-    timeframe: "M5",
+    symbol: SYMBOL,
+    timeframe: TIMEFRAME,
     startDate: new Date(startTimestamp).toISOString(),
     endDate: new Date(endTimestamp).toISOString(),
     count: rangeCandles.length,
@@ -211,42 +189,63 @@ export async function getWinM5CandlesInRange(input: {
   });
 }
 
-export function getCandlesEndingAt(input: {
-  candles: readonly MarketDataCandle[];
+export async function getCandlesEndingAt(input: {
   lastCandleTime: string;
   candleCount: number;
-}): MarketDataCandle[] {
+  symbol: string;
+  timeframe: string;
+}): Promise<MarketDataCandle[]> {
   const lastCandleTimestamp = parseInputDate(
     input.lastCandleTime,
     "lastCandleTime",
   );
-  const lastCandleTimestampSeconds = Math.floor(lastCandleTimestamp / 1000);
-  const matchedIndex = input.candles.findIndex(
-    candle => candle.time === lastCandleTimestampSeconds,
-  );
+  const lastCandleTimestampSeconds = toEpochSeconds(lastCandleTimestamp);
+  const normalizedLastCandleTime = toIsoSeconds(lastCandleTimestamp);
+  const candles: MarketDataCandle[] = [];
+  let offset = 0;
 
-  if (matchedIndex === -1) {
-    const normalizedLastCandleTime = new Date(
-      lastCandleTimestamp,
-    ).toISOString();
+  while (candles.length < input.candleCount) {
+    const pageSize = Math.min(
+      QUERY_PAGE_SIZE,
+      input.candleCount - candles.length,
+    );
+    const { data, error } = await getSupabaseClient()
+      .from("market_candles")
+      .select(CANDLE_COLUMNS)
+      .eq("symbol", input.symbol)
+      .eq("timeframe", input.timeframe)
+      .lte("time", normalizedLastCandleTime)
+      .order("time", { ascending: false })
+      .range(offset, offset + pageSize - 1);
 
+    if (error) {
+      throwQueryError(
+        `Could not query ${input.symbol} ${input.timeframe} candles ending at time`,
+        error,
+      );
+    }
+
+    const rows = data ?? [];
+    candles.push(...rows.map(parseCandleRow));
+
+    if (rows.length === 0) {
+      break;
+    }
+
+    offset += rows.length;
+  }
+
+  if (candles[0]?.time !== lastCandleTimestampSeconds) {
     throw new MarketDataCandleNotFoundError(
-      `No WIN@N M5 candle found at ${normalizedLastCandleTime}.`,
+      `No ${input.symbol} ${input.timeframe} candle found at ${normalizedLastCandleTime}.`,
     );
   }
 
-  const endIndex = matchedIndex + 1;
-  const startIndex = endIndex - input.candleCount;
-
-  if (startIndex < 0) {
-    const normalizedLastCandleTime = new Date(
-      lastCandleTimestamp,
-    ).toISOString();
-
+  if (candles.length < input.candleCount) {
     throw new InvalidMarketDataRangeError(
-      `Requested ${input.candleCount} candles, but only ${endIndex} candles are available at or before ${normalizedLastCandleTime}.`,
+      `Requested ${input.candleCount} ${input.symbol} ${input.timeframe} candles, but only ${candles.length} candles are available at or before ${normalizedLastCandleTime}.`,
     );
   }
 
-  return input.candles.slice(startIndex, endIndex);
+  return candles.reverse();
 }

@@ -18,6 +18,27 @@ pnpm build
 pnpm start
 ```
 
+## Supabase Market Data
+
+Market candle queries require server-side Supabase credentials:
+
+```bash
+SUPABASE_URL=your-supabase-url
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+```
+
+The service-role key must remain server-only and must not be exposed to browser
+code.
+
+Start the chart renderer with:
+
+```bash
+pnpm renderer
+```
+
+The standalone renderer loads these credentials from the repository `.env`
+file.
+
 ## LangSmith Observability
 
 `src/agent/trading-agent.ts` is instrumented with LangSmith tracing.

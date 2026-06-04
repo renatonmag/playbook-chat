@@ -50,14 +50,22 @@ type BrowserChartConfig = {
   height: number;
 };
 
+type BrowserPriceFormat = {
+  type: "price";
+  precision: number;
+  minMove: number;
+};
+
 type BrowserChartPayload = {
   symbol?: string;
   timeframe?: string;
   candles: ChartRenderCandle[];
   wma30: ChartRenderLinePoint[];
+  priceFormat: BrowserPriceFormat;
 };
 
 type BrowserSeriesApi = {
+  applyOptions(options: unknown): void;
   setData(data: unknown[]): void;
 };
 
@@ -91,8 +99,51 @@ function calculateWma(candles: ChartRenderCandle[], period = 30) {
 
   return averages.map((value, index) => ({
     time: candles[index + period - 1].time,
-    value: Number(value.toFixed(2)),
+    value,
   }));
+}
+
+function getDecimalPrecision(value: number) {
+  if (Number.isInteger(value)) {
+    return 0;
+  }
+
+  const [coefficient, exponentText] = Math.abs(value)
+    .toString()
+    .toLowerCase()
+    .split("e");
+  const fractionLength = coefficient.split(".")[1]?.length ?? 0;
+  const exponent = exponentText ? Number(exponentText) : 0;
+
+  return Math.max(0, fractionLength - exponent);
+}
+
+function inferPriceFormat(candle: ChartRenderCandle): BrowserPriceFormat {
+  const prices = [candle.open, candle.high, candle.low, candle.close];
+  const maximumPrecision = Math.max(...prices.map(getDecimalPrecision));
+  const isBelowTen = prices.every(price => Math.abs(price) < 10);
+
+  if (isBelowTen && maximumPrecision >= 4) {
+    return {
+      type: "price",
+      precision: 5,
+      minMove: 0.00001,
+    };
+  }
+
+  if (maximumPrecision >= 3) {
+    return {
+      type: "price",
+      precision: 3,
+      minMove: 0.001,
+    };
+  }
+
+  return {
+    type: "price",
+    precision: 0,
+    minMove: 5,
+  };
 }
 
 function initializeChartPage(config: BrowserChartConfig) {
@@ -161,8 +212,10 @@ function initializeChartPage(config: BrowserChartConfig) {
   window.setChartData = payload => {
     window.__chartReady = false;
 
-    const { candles, wma30 } = payload;
+    const { candles, priceFormat, wma30 } = payload;
 
+    candleSeries.applyOptions({ priceFormat });
+    wma30Series.applyOptions({ priceFormat });
     candleSeries.setData(candles);
     wma30Series.setData(wma30);
     chart.timeScale().fitContent();
@@ -290,6 +343,7 @@ export class ChartRenderer {
       timeframe: payload.timeframe,
       candles: payload.candles,
       wma30,
+      priceFormat: inferPriceFormat(payload.candles[0]),
     } satisfies BrowserChartPayload;
 
     await this.page.evaluate(nextPayload => {

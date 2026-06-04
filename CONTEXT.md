@@ -44,6 +44,10 @@ _Avoid_: Mandatory sub-agent, default expert
 A Core Specialist Review that assesses breakout strength, follow-through, gap behavior, failure risk, and whether visible evidence supports continuation, failed breakout, reversal, or no meaningful breakout condition. It also watches for the transition from breakout behavior into channel behavior, but synthesis decides the final Market Hypothesis.
 _Avoid_: Breakout agent, reversal state, breakout call
 
+**Breakout Condition**:
+The current visible state of breakout behavior, such as continuation, weak continuation, failed breakout, reversal, breakout mode, no meaningful breakout, or unclear evidence. It is a Specialist Review classification, not the final Market Hypothesis.
+_Avoid_: Breakout call, breakout trade, breakout verdict
+
 **Bar-by-Bar Review**:
 A baseline review of the most recent 5-10 visible bars that runs after every Chart Overview. It interprets those bars in their visible context, such as pattern behavior, moving-average interaction, support or resistance tests, and what the sequence implies for likely next moves.
 _Avoid_: Conditional bar report, candle summary, recent moves note
@@ -53,8 +57,8 @@ The final structured interpretation of the current chart situation after synthes
 _Avoid_: Final state, final overview, answer data
 
 **Market Hypothesis**:
-The current buy, sell, or wait interpretation inside the Market Read. It is updated when new Chart Images change the evidence, and the newest visible evidence takes priority over prior hypotheses.
-_Avoid_: Latest bias, buy/sell state, final call
+The current buy, sell, or wait/no-trade interpretation inside the Market Read. Wait/no-trade is a first-class hypothesis when the visible evidence lacks a clear directional edge, not a failure to answer.
+_Avoid_: Latest bias, buy/sell state, final call, hedge
 
 **Conversation History**:
 The ordered user and assistant messages that provide context for a visual analysis thread. It is persisted alongside the Market Read, but it is not part of the Market Read itself.
@@ -101,6 +105,10 @@ Domain Expert: "No. It writes a Specialist Review; synthesis decides how much of
 Developer: "What does the breakout/reversal specialist decide?"
 
 Domain Expert: "It does not decide the final trade. It reviews breakout quality, follow-through, and failure risk so synthesis can judge continuation versus failed breakout or reversal."
+
+Developer: "Is breakout strength the main output?"
+
+Domain Expert: "No. The specialist identifies the Breakout Condition first, then uses strength as supporting detail."
 
 Developer: "Can it say the breakout became a channel?"
 

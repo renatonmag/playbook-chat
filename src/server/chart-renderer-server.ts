@@ -1,19 +1,21 @@
+import "dotenv/config";
 import express from "express";
 import { writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { ChartRenderer, type ChartRenderCandle } from "./chart-renderer";
 import {
   getCandlesEndingAt,
+  getWinM5LastCandles,
   InvalidMarketDataRangeError,
-  loadWinM5Candles,
   MarketDataCandleNotFoundError,
-  type MarketDataCandle,
 } from "./market-data";
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_WIDTH = 1000;
 const DEFAULT_HEIGHT = 600;
 const DEFAULT_OUTPUT_FILE = "latest-chart.png";
+const DEFAULT_SYMBOL = "WIN@N";
+const DEFAULT_TIMEFRAME = "M5";
 const MAX_CANDLES = 200;
 
 const chartCandleSchema = z.object({
@@ -27,8 +29,8 @@ const chartCandleSchema = z.object({
 const renderRequestSchema = z.object({
   lastCandleTime: z.string().trim().min(1),
   candleCount: z.number().int().positive(),
-  symbol: z.string().trim().optional(),
-  timeframe: z.string().trim().optional(),
+  symbol: z.string().trim().min(1).default(DEFAULT_SYMBOL),
+  timeframe: z.string().trim().min(1).default(DEFAULT_TIMEFRAME),
 });
 
 const newBarRequestSchema = chartCandleSchema.extend({
@@ -123,27 +125,25 @@ const renderer = new ChartRenderer({
   width,
   height,
 });
-let loadedCandles: MarketDataCandle[] = [];
+let marketDataReady = false;
 let legacyCandles = generateDemoCandles();
 
 app.get("/health", (_request, response) => {
   response.json({
     ok: true,
-    ready: loadedCandles.length > 0,
-    candles: loadedCandles.length,
+    ready: marketDataReady,
+    source: "supabase",
   });
 });
 
 app.get("/chart.png", async (_request, response) => {
   try {
-    const latestCandles = loadedCandles.slice(
-      -Math.min(100, loadedCandles.length),
-    );
+    const marketData = await getWinM5LastCandles();
 
     const png = await renderer.render({
       symbol: "WIN@N",
       timeframe: "M5",
-      candles: latestCandles,
+      candles: marketData.candles,
     });
 
     response.setHeader("Content-Type", "image/png");
@@ -201,14 +201,15 @@ app.post("/new-bar", async (request, response) => {
 app.post("/render", async (request, response) => {
   try {
     const payload = renderRequestSchema.parse(request.body);
-    const selectedCandles = getCandlesEndingAt({
-      candles: loadedCandles,
+    const selectedCandles = await getCandlesEndingAt({
       lastCandleTime: payload.lastCandleTime,
       candleCount: payload.candleCount,
+      symbol: payload.symbol,
+      timeframe: payload.timeframe,
     });
     const png = await renderer.render({
-      symbol: payload.symbol || "WIN@N",
-      timeframe: payload.timeframe || "M5",
+      symbol: payload.symbol,
+      timeframe: payload.timeframe,
       candles: selectedCandles,
     });
 
@@ -250,12 +251,13 @@ async function stopRendererAndExit(signal: NodeJS.Signals) {
 }
 
 async function main() {
-  loadedCandles = await loadWinM5Candles();
+  await getWinM5LastCandles();
+  marketDataReady = true;
   await renderer.start();
 
   app.listen(port, () => {
     console.log(`Renderer running on http://localhost:${port}`);
-    console.log(`Loaded ${loadedCandles.length} WIN@N M5 candles.`);
+    console.log("Connected to Supabase WIN@N M5 market data.");
     console.log(`Open latest chart: http://localhost:${port}/chart.png`);
   });
 }
